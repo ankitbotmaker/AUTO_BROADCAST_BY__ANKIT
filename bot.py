@@ -1,4 +1,4 @@
- import telebot
+import telebot
 from telebot import types
 from pymongo import MongoClient
 import threading
