@@ -1773,12 +1773,16 @@ Choose an action:
                 state["step"] = "ask_autodelete"
                 markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
+                    types.InlineKeyboardButton("🗑 5 Min", callback_data="delete_5"),
+                    types.InlineKeyboardButton("🗑 10 Min", callback_data="delete_10"),
+                    types.InlineKeyboardButton("🗑 15 Min", callback_data="delete_15"),
                     types.InlineKeyboardButton("🗑 30 Min", callback_data="delete_30"),
                     types.InlineKeyboardButton("🗑 1 Hour", callback_data="delete_1h"),
                     types.InlineKeyboardButton("🗑 2 Hours", callback_data="delete_2h"),
                     types.InlineKeyboardButton("🗑 6 Hours", callback_data="delete_6h"),
                     types.InlineKeyboardButton("🗑 12 Hours", callback_data="delete_12h"),
                     types.InlineKeyboardButton("🗑 24 Hours", callback_data="delete_24h"),
+                    types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
                     types.InlineKeyboardButton("❌ No Delete", callback_data="delete_no"),
                 )
                 bot.send_message(call.message.chat.id, "🗑 **Auto Delete Options**\n\nChoose when to auto delete the broadcasted message:", reply_markup=markup, parse_mode="Markdown")
@@ -1786,6 +1790,9 @@ Choose an action:
             elif call.data == "delete_yes":
                 state["step"] = "ask_autodelete_time"
                 bot.send_message(call.message.chat.id, "⏱ After how many minutes should the message auto-delete?")
+            elif call.data == "delete_custom":
+                state["step"] = "ask_autodelete_time"
+                bot.send_message(call.message.chat.id, "⏱ Enter custom delete time in minutes (minimum 1):")
             elif call.data == "delete_no":
                 state["delete_time"] = None
                 finish_broadcast(call.message.chat.id)
