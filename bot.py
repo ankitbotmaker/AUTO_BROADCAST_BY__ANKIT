@@ -2509,8 +2509,41 @@ if __name__ == "__main__":
     start_scheduled_broadcast_checker()
     logger.info("✅ Scheduled broadcast checker started")
     
+    # Check if running on Heroku
+    port = int(os.environ.get('PORT', 5000))
+    
     try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
-    except Exception as e:
-        logger.error(f"Bot polling error: {e}")
-        raise
+        # Try webhook first (for Heroku)
+        logger.info("🌐 Attempting to start webhook...")
+        bot.remove_webhook()
+        webhook_url = f"https://ankitbb.herokuapp.com/{BOT_TOKEN}"
+        bot.set_webhook(url=webhook_url)
+        logger.info(f"✅ Webhook set successfully: {webhook_url}")
+        
+        # Don't start polling when using webhook
+        logger.info("🌐 Webhook mode active. Bot will receive updates via webhook.")
+        return
+        
+    except Exception as webhook_error:
+        logger.warning(f"Webhook failed: {webhook_error}")
+        logger.info("🔄 Falling back to polling...")
+        
+        # Fallback to polling with retry mechanism
+        max_retries = 5
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                logger.info(f"🔄 Starting bot polling (attempt {retry_count + 1}/{max_retries})")
+                bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_exception=True)
+                break
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"Bot polling error (attempt {retry_count}/{max_retries}): {e}")
+                
+                if retry_count < max_retries:
+                    logger.info(f"🔄 Retrying in 10 seconds...")
+                    time.sleep(10)
+                else:
+                    logger.error("❌ Max retries reached. Bot failed to start.")
+                    raise
