@@ -2512,22 +2512,24 @@ if __name__ == "__main__":
     # Check if running on Heroku
     port = int(os.environ.get('PORT', 5000))
     
-    try:
-        # Try webhook first (for Heroku)
-        logger.info("🌐 Attempting to start webhook...")
-        bot.remove_webhook()
-        webhook_url = f"https://ankitbb.herokuapp.com/{BOT_TOKEN}"
-        bot.set_webhook(url=webhook_url)
-        logger.info(f"✅ Webhook set successfully: {webhook_url}")
+    # Check if running on Heroku (has PORT environment variable)
+    if os.environ.get('PORT'):
+        try:
+            # Try webhook for Heroku
+            logger.info("🌐 Attempting to start webhook for Heroku...")
+            bot.remove_webhook()
+            webhook_url = f"https://ankitbb.herokuapp.com/{BOT_TOKEN}"
+            bot.set_webhook(url=webhook_url)
+            logger.info(f"✅ Webhook set successfully: {webhook_url}")
+            logger.info("🌐 Webhook mode active. Bot will receive updates via webhook.")
+            
+        except Exception as webhook_error:
+            logger.warning(f"Webhook failed: {webhook_error}")
+    else:
+        # Local environment - use polling
+        logger.info("🔄 Starting bot polling for local environment...")
         
-        # Don't start polling when using webhook
-        logger.info("🌐 Webhook mode active. Bot will receive updates via webhook.")
-        
-    except Exception as webhook_error:
-        logger.warning(f"Webhook failed: {webhook_error}")
-        logger.info("🔄 Falling back to polling...")
-        
-        # Fallback to polling with retry mechanism
+        # Polling with retry mechanism
         max_retries = 5
         retry_count = 0
         
