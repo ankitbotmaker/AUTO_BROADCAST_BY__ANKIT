@@ -1,6 +1,12 @@
 import os
 import logging
 from flask import Flask, request
+
+# Set up environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
+# Import bot after environment setup
 from bot import bot, logger
 
 app = Flask(__name__)

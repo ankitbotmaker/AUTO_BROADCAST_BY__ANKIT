@@ -2522,7 +2522,6 @@ if __name__ == "__main__":
         
         # Don't start polling when using webhook
         logger.info("🌐 Webhook mode active. Bot will receive updates via webhook.")
-        return
         
     except Exception as webhook_error:
         logger.warning(f"Webhook failed: {webhook_error}")
