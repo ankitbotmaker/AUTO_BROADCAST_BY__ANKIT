@@ -2509,42 +2509,11 @@ if __name__ == "__main__":
     start_scheduled_broadcast_checker()
     logger.info("✅ Scheduled broadcast checker started")
     
-    # Check if running on Heroku
-    port = int(os.environ.get('PORT', 5000))
+    # Simple polling for both local and Heroku
+    logger.info("🔄 Starting bot polling...")
     
-    # Check if running on Heroku (has PORT environment variable)
-    if os.environ.get('PORT'):
-        try:
-            # Try webhook for Heroku
-            logger.info("🌐 Attempting to start webhook for Heroku...")
-            bot.remove_webhook()
-            webhook_url = f"https://ankitbb.herokuapp.com/{BOT_TOKEN}"
-            bot.set_webhook(url=webhook_url)
-            logger.info(f"✅ Webhook set successfully: {webhook_url}")
-            logger.info("🌐 Webhook mode active. Bot will receive updates via webhook.")
-            
-        except Exception as webhook_error:
-            logger.warning(f"Webhook failed: {webhook_error}")
-    else:
-        # Local environment - use polling
-        logger.info("🔄 Starting bot polling for local environment...")
-        
-        # Polling with retry mechanism
-        max_retries = 5
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                logger.info(f"🔄 Starting bot polling (attempt {retry_count + 1}/{max_retries})")
-                bot.infinity_polling(timeout=60, long_polling_timeout=60, restart_on_exception=True)
-                break
-            except Exception as e:
-                retry_count += 1
-                logger.error(f"Bot polling error (attempt {retry_count}/{max_retries}): {e}")
-                
-                if retry_count < max_retries:
-                    logger.info(f"🔄 Retrying in 10 seconds...")
-                    time.sleep(10)
-                else:
-                    logger.error("❌ Max retries reached. Bot failed to start.")
-                    raise
+    try:
+        bot.infinity_polling(timeout=60, long_polling_timeout=60)
+    except Exception as e:
+        logger.error(f"Bot polling error: {e}")
+        raise
