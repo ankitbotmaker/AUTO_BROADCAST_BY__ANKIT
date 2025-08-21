@@ -319,40 +319,51 @@ class BroadcastBot:
             logger.error(f"Error getting premium users: {e}")
             return []
     
-    def get_channel_count(self) -> int:
-        """Get total number of channels"""
+    def get_channel_count(self, user_id: int = None) -> int:
+        """Get total number of channels for a user"""
         try:
-            return self.channels_col.count_documents({})
+            if user_id:
+                return self.channels_col.count_documents({"user_id": user_id})
+            else:
+                return self.channels_col.count_documents({})
         except Exception as e:
-            logger.error(f"Error getting channel count: {e}")
+            logger.error(f"Error getting channel count for user {user_id}: {e}")
             return 0
     
-    def add_channel(self, channel_id: int) -> bool:
-        """Add a channel to the database"""
+    def add_channel(self, channel_id: int, user_id: int) -> bool:
+        """Add a channel to the user's personal database"""
         try:
-            if not self.channels_col.find_one({"channel_id": channel_id}):
-                self.channels_col.insert_one({"channel_id": channel_id, "added_at": datetime.now()})
+            # Check if channel already exists for this user
+            if not self.channels_col.find_one({"channel_id": channel_id, "user_id": user_id}):
+                self.channels_col.insert_one({
+                    "channel_id": channel_id, 
+                    "user_id": user_id,
+                    "added_at": datetime.now()
+                })
                 return True
             return False
         except Exception as e:
-            logger.error(f"Error adding channel {channel_id}: {e}")
+            logger.error(f"Error adding channel {channel_id} for user {user_id}: {e}")
             return False
     
-    def remove_channel(self, channel_id: int) -> bool:
-        """Remove a channel from the database"""
+    def remove_channel(self, channel_id: int, user_id: int) -> bool:
+        """Remove a channel from the user's personal database"""
         try:
-            result = self.channels_col.delete_one({"channel_id": channel_id})
+            result = self.channels_col.delete_one({"channel_id": channel_id, "user_id": user_id})
             return result.deleted_count > 0
         except Exception as e:
-            logger.error(f"Error removing channel {channel_id}: {e}")
+            logger.error(f"Error removing channel {channel_id} for user {user_id}: {e}")
             return False
     
-    def get_all_channels(self) -> list:
-        """Get all channels from database"""
+    def get_all_channels(self, user_id: int = None) -> list:
+        """Get all channels from database for a specific user"""
         try:
-            return list(self.channels_col.find({}, {"channel_id": 1, "_id": 0}))
+            if user_id:
+                return list(self.channels_col.find({"user_id": user_id}, {"channel_id": 1, "_id": 0}))
+            else:
+                return list(self.channels_col.find({}, {"channel_id": 1, "_id": 0}))
         except Exception as e:
-            logger.error(f"Error getting channels: {e}")
+            logger.error(f"Error getting channels for user {user_id}: {e}")
             return []
     
     def save_broadcast_message(self, owner_id: int, channel_id: int, message_id: int, broadcast_id: str):
@@ -363,6 +374,7 @@ class BroadcastBot:
                 "channel_id": channel_id,
                 "message_id": message_id,
                 "broadcast_id": broadcast_id,
+                "user_id": owner_id,  # Add user_id for personal tracking
                 "timestamp": datetime.now()
             })
         except Exception as e:
@@ -392,7 +404,7 @@ class BroadcastBot:
             return False
     
     def get_broadcast_stats(self, owner_id: int) -> dict:
-        """Get broadcast statistics"""
+        """Get broadcast statistics for a specific user"""
         try:
             total_messages = broadcast_messages_col.count_documents({"owner_id": owner_id})
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -408,7 +420,7 @@ class BroadcastBot:
                 "total_messages": total_messages,
                 "today_messages": today_messages,
                 "total_broadcasts": len(broadcast_ids),
-                "channels_count": self.get_channel_count()
+                "channels_count": self.get_channel_count(owner_id)
             }
         except Exception as e:
             logger.error(f"Error getting broadcast stats: {e}")
@@ -510,7 +522,8 @@ def auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[i
             if stop_flag.get("stop", False):
                 break
                 
-            channels = broadcast_bot.get_all_channels()
+            # Get channels for this specific user
+            channels = broadcast_bot.get_all_channels(chat_id)
             success_count = 0
             failed_count = 0
             
@@ -522,13 +535,86 @@ def auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[i
                     if message.content_type == "text":
                         sent = bot.send_message(channel_id, message.text)
                     elif message.content_type == "photo":
-                        sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=message.caption)
+                        # Handle photo with caption (text, links, formatting)
+                        caption = message.caption or ""
+                        
+                        # Simple and reliable method - try forwarding first, then sending
+                        try:
+                            # Method 1: Forward the original message (preserves everything)
+                            sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                            logger.info(f"Photo auto-forwarded successfully to {channel_id}")
+                        except Exception as forward_error:
+                            logger.warning(f"Auto-forward failed, trying to send: {forward_error}")
+                            try:
+                                # Method 2: Send photo with caption
+                                sent = bot.send_photo(
+                                    channel_id, 
+                                    message.photo[-1].file_id, 
+                                    caption=caption
+                                )
+                                logger.info(f"Photo auto-sent successfully to {channel_id}")
+                            except Exception as send_error:
+                                logger.error(f"Photo auto-send failed to {channel_id}: {send_error}")
+                                raise send_error
                     elif message.content_type == "video":
-                        sent = bot.send_video(channel_id, message.video.file_id, caption=message.caption)
+                        # Handle video with caption (text, links, formatting)
+                        caption = message.caption or ""
+                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                        
+                        try:
+                            sent = bot.send_video(
+                                channel_id, 
+                                message.video.file_id, 
+                                caption=caption,
+                                parse_mode=parse_mode
+                            )
+                        except Exception as caption_error:
+                            logger.warning(f"Markdown parsing failed for video caption, sending as plain text: {caption_error}")
+                            sent = bot.send_video(
+                                channel_id, 
+                                message.video.file_id, 
+                                caption=caption
+                            )
+                            
                     elif message.content_type == "document":
-                        sent = bot.send_document(channel_id, message.document.file_id, caption=message.caption)
+                        # Handle document with caption (text, links, formatting)
+                        caption = message.caption or ""
+                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                        
+                        try:
+                            sent = bot.send_document(
+                                channel_id, 
+                                message.document.file_id, 
+                                caption=caption,
+                                parse_mode=parse_mode
+                            )
+                        except Exception as caption_error:
+                            logger.warning(f"Markdown parsing failed for document caption, sending as plain text: {caption_error}")
+                            sent = bot.send_document(
+                                channel_id, 
+                                message.document.file_id, 
+                                caption=caption
+                            )
+                            
                     elif message.content_type == "audio":
-                        sent = bot.send_audio(channel_id, message.audio.file_id, caption=message.caption)
+                        # Handle audio with caption (text, links, formatting)
+                        caption = message.caption or ""
+                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                        
+                        try:
+                            sent = bot.send_audio(
+                                channel_id, 
+                                message.audio.file_id, 
+                                caption=caption,
+                                parse_mode=parse_mode
+                            )
+                        except Exception as caption_error:
+                            logger.warning(f"Markdown parsing failed for audio caption, sending as plain text: {caption_error}")
+                            sent = bot.send_audio(
+                                channel_id, 
+                                message.audio.file_id, 
+                                caption=caption
+                            )
                     else:
                         sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
 
@@ -563,7 +649,7 @@ def auto_delete(chat_id: int, msg_id: int, delete_time: int):
     except Exception as e:
         logger.error(f"❌ Delete failed for {chat_id} -> {e}")
 
-@bot.message_handler(commands=["start", "history", "status", "myinfo"])
+@bot.message_handler(commands=["start", "history", "status", "myinfo", "test"])
 def start_cmd(message):
     """Enhanced start command with better UI"""
     # Add user to database if not exists
@@ -585,6 +671,16 @@ def start_cmd(message):
         )
         return
     
+    if message.text == "/test":
+        # Test function for debugging
+        bot.send_message(
+            message.chat.id,
+            "🧪 **Test Mode Active**\n\nNow forward any message to test broadcast functionality.\n\nBot will show detailed information about the forwarded message.",
+            parse_mode="Markdown"
+        )
+        bot_state.broadcast_state[message.chat.id] = {"step": "waiting_msg"}
+        return
+        
     if message.text == "/history":
         # Show broadcast history
         messages = broadcast_bot.get_broadcast_messages(message.chat.id)
@@ -677,6 +773,9 @@ def start_cmd(message):
         types.InlineKeyboardButton("📋 Show Channels", callback_data="show_channels"),
     )
     markup.add(
+        types.InlineKeyboardButton("📢 My Channels", callback_data="my_channels"),
+    )
+    markup.add(
         types.InlineKeyboardButton("🗑 Clear All", callback_data="clear_channels"),
         types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
     )
@@ -713,9 +812,9 @@ def start_cmd(message):
     welcome_text = f"""
 👋 **Welcome to Broadcast Bot Panel!**
 
-**Owner ID:** `{OWNER_ID}`
-**Channels:** `{broadcast_bot.get_channel_count()}`
-**Status:** ✅ Online
+**👑 Owner:** ANKIT
+**📢 Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`
+**🟢 Status:** ✅ Online
 
 Choose an option below:
     """
@@ -803,7 +902,7 @@ Would you like to:
             )
 
         elif call.data == "remove_channel":
-            channels = broadcast_bot.get_all_channels()
+            channels = broadcast_bot.get_all_channels(call.message.chat.id)
             if channels:
                 markup = types.InlineKeyboardMarkup(row_width=1)
                 for ch in channels[:10]:  # Limit to 10 buttons
@@ -817,7 +916,7 @@ Would you like to:
 
         elif call.data.startswith("remove_"):
             channel_id = int(call.data.split("_")[1])
-            if broadcast_bot.remove_channel(channel_id):
+            if broadcast_bot.remove_channel(channel_id, call.message.chat.id):
                 bot.answer_callback_query(call.id, f"✅ Removed channel {channel_id}")
                 bot.edit_message_text(f"✅ Channel {channel_id} removed successfully.", 
                                     call.message.chat.id, call.message.message_id)
@@ -825,33 +924,83 @@ Would you like to:
                 bot.answer_callback_query(call.id, "❌ Failed to remove channel")
 
         elif call.data == "show_channels":
-            channels = broadcast_bot.get_all_channels()
+            channels = broadcast_bot.get_all_channels(call.message.chat.id)
             if channels:
                 channel_list = "\n".join([f"• `{ch['channel_id']}`" for ch in channels])
                 bot.send_message(
                     call.message.chat.id, 
-                    f"📋 **Saved Channels ({len(channels)}):**\n\n{channel_list}",
+                    f"📋 **Your Saved Channels ({len(channels)}):**\n\n{channel_list}",
                     parse_mode="Markdown"
                 )
             else:
                 bot.send_message(call.message.chat.id, "⚠️ No channels saved.")
 
+        elif call.data == "my_channels":
+            channels = broadcast_bot.get_all_channels(call.message.chat.id)
+            if channels:
+                # Get detailed channel information
+                detailed_channels = []
+                for ch in channels:
+                    try:
+                        chat_info = bot.get_chat(ch['channel_id'])
+                        channel_name = chat_info.title
+                        channel_username = getattr(chat_info, 'username', None)
+                        member_count = getattr(chat_info, 'member_count', 'N/A')
+                        
+                        channel_info = f"📢 **{channel_name}**\n"
+                        channel_info += f"🆔 ID: `{ch['channel_id']}`\n"
+                        if channel_username:
+                            channel_info += f"🔗 Username: @{channel_username}\n"
+                        channel_info += f"👥 Members: {member_count}\n"
+                        detailed_channels.append(channel_info)
+                    except Exception as e:
+                        # If can't get chat info, show basic info
+                        detailed_channels.append(f"📢 **Channel**\n🆔 ID: `{ch['channel_id']}`\n❌ Info unavailable\n")
+                
+                channels_text = f"📢 **Your Channels ({len(channels)})**\n\n"
+                channels_text += "\n".join(detailed_channels)
+                
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🔄 Refresh", callback_data="my_channels"),
+                    types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
+                )
+                
+                bot.send_message(
+                    call.message.chat.id, 
+                    channels_text,
+                    reply_markup=markup,
+                    parse_mode="Markdown"
+                )
+            else:
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                markup.add(
+                    types.InlineKeyboardButton("➕ Add Channel", callback_data="add_channel"),
+                    types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
+                )
+                bot.send_message(
+                    call.message.chat.id, 
+                    "📢 **No Channels Found**\n\nYou haven't added any channels yet.\n\nClick 'Add Channel' to get started!",
+                    reply_markup=markup,
+                    parse_mode="Markdown"
+                )
+
         elif call.data == "clear_channels":
             try:
-                channels_col.delete_many({})
-                bot.send_message(call.message.chat.id, "🗑 All channels cleared successfully.")
+                channels_col.delete_many({"user_id": call.message.chat.id})
+                bot.send_message(call.message.chat.id, "🗑 All your channels cleared successfully.")
             except Exception as e:
                 logger.error(f"Error clearing channels: {e}")
                 bot.send_message(call.message.chat.id, "❌ Error clearing channels.")
 
         elif call.data == "stats":
-            total_channels = broadcast_bot.get_channel_count()
+            total_channels = broadcast_bot.get_channel_count(call.message.chat.id)
             active_reposts_count = len(bot_state.active_reposts)
             
             stats_text = f"""
-📊 **Bot Statistics**
+📊 **Your Bot Statistics**
 
-**Channels:** `{total_channels}`
+**Your Channels:** `{total_channels}`
 **Active Reposts:** `{active_reposts_count}`
 **Bot Status:** ✅ Online
 **Last Updated:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
@@ -965,6 +1114,9 @@ Would you like to:
                 types.InlineKeyboardButton("📋 Show Channels", callback_data="show_channels"),
             )
             markup.add(
+                types.InlineKeyboardButton("📢 My Channels", callback_data="my_channels"),
+            )
+            markup.add(
                 types.InlineKeyboardButton("🗑 Clear All", callback_data="clear_channels"),
                 types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
             )
@@ -1001,9 +1153,9 @@ Would you like to:
             welcome_text = f"""
 👋 **Welcome to Broadcast Bot Panel!**
 
-**Owner ID:** `{OWNER_ID}`
-**Channels:** `{broadcast_bot.get_channel_count()}`
-**Status:** ✅ Online
+**👑 Owner:** ANKIT
+**📢 Your Channels:** `{broadcast_bot.get_channel_count(call.message.chat.id)}`
+**🟢 Status:** ✅ Online
 
 Choose an option below:
             """
@@ -1060,10 +1212,25 @@ Choose an option to configure:
             )
 
         elif call.data == "schedule_broadcast":
-            bot_state.broadcast_state[call.message.chat.id] = {"step": "schedule_msg"}
+            # Show simple schedule options
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("⏰ 1 Hour", callback_data="schedule_1h"),
+                types.InlineKeyboardButton("⏰ 2 Hours", callback_data="schedule_2h"),
+                types.InlineKeyboardButton("⏰ 3 Hours", callback_data="schedule_3h"),
+                types.InlineKeyboardButton("⏰ 6 Hours", callback_data="schedule_6h"),
+                types.InlineKeyboardButton("⏰ 12 Hours", callback_data="schedule_12h"),
+                types.InlineKeyboardButton("⏰ 24 Hours", callback_data="schedule_24h"),
+            )
+            markup.add(
+                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
+            )
+            
             bot.send_message(
                 call.message.chat.id,
-                "📅 **Schedule Broadcast**\n\nSend the message you want to schedule for later broadcast:"
+                "📅 **Schedule Broadcast**\n\nChoose when you want to schedule the broadcast:",
+                reply_markup=markup,
+                parse_mode="Markdown"
             )
 
         elif call.data == "advanced_stats":
@@ -1211,7 +1378,7 @@ Manage your bot data:
                 if broadcast_bot.schedule_broadcast(call.message.chat.id, message, channels, schedule_time, broadcast_id):
                     bot.send_message(
                         call.message.chat.id,
-                        f"✅ **Broadcast Scheduled Successfully!**\n\n📅 **Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n📢 **Channels:** `{len(channels)}`\n🆔 **Broadcast ID:** `{broadcast_id}`\n\nYou'll be notified when the broadcast is sent.",
+                        f"✅ **Broadcast Scheduled Successfully!**\n\n📅 **Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n📢 **Your Channels:** `{len(channels)}`\n🆔 **Broadcast ID:** `{broadcast_id}`\n\nYou'll be notified when the broadcast is sent.",
                         parse_mode="Markdown"
                     )
                 else:
@@ -1222,6 +1389,15 @@ Manage your bot data:
         elif call.data == "cancel_schedule":
             bot_state.broadcast_state.pop(call.message.chat.id, None)
             bot.send_message(call.message.chat.id, "❌ Schedule cancelled")
+
+        # Simple schedule options
+        elif call.data.startswith("schedule_"):
+            hours = int(call.data.split("_")[1].replace("h", ""))
+            bot_state.broadcast_state[call.message.chat.id] = {"step": "schedule_msg", "hours": hours}
+            bot.send_message(
+                call.message.chat.id,
+                f"📅 **Schedule for {hours} Hour{'s' if hours > 1 else ''}**\n\nSend the message you want to schedule for broadcast in {hours} hour{'s' if hours > 1 else ''}."
+            )
 
         elif call.data == "forward_message_help":
             help_text = """
@@ -1595,12 +1771,17 @@ Choose an action:
             elif call.data == "repost_no":
                 state["repost_time"] = None
                 state["step"] = "ask_autodelete"
-                markup = types.InlineKeyboardMarkup()
+                markup = types.InlineKeyboardMarkup(row_width=2)
                 markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+                    types.InlineKeyboardButton("🗑 30 Min", callback_data="delete_30"),
+                    types.InlineKeyboardButton("🗑 1 Hour", callback_data="delete_1h"),
+                    types.InlineKeyboardButton("🗑 2 Hours", callback_data="delete_2h"),
+                    types.InlineKeyboardButton("🗑 6 Hours", callback_data="delete_6h"),
+                    types.InlineKeyboardButton("🗑 12 Hours", callback_data="delete_12h"),
+                    types.InlineKeyboardButton("🗑 24 Hours", callback_data="delete_24h"),
+                    types.InlineKeyboardButton("❌ No Delete", callback_data="delete_no"),
                 )
-                bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
+                bot.send_message(call.message.chat.id, "🗑 **Auto Delete Options**\n\nChoose when to auto delete the broadcasted message:", reply_markup=markup, parse_mode="Markdown")
 
             elif call.data == "delete_yes":
                 state["step"] = "ask_autodelete_time"
@@ -1608,6 +1789,19 @@ Choose an action:
             elif call.data == "delete_no":
                 state["delete_time"] = None
                 finish_broadcast(call.message.chat.id)
+            elif call.data.startswith("delete_"):
+                if call.data == "delete_no":
+                    state["delete_time"] = None
+                    finish_broadcast(call.message.chat.id)
+                else:
+                    # Extract time from callback data
+                    time_str = call.data.replace("delete_", "")
+                    if time_str.endswith("h"):
+                        hours = int(time_str.replace("h", ""))
+                        state["delete_time"] = hours * 60  # Convert to minutes
+                    else:
+                        state["delete_time"] = int(time_str)  # Already in minutes
+                    finish_broadcast(call.message.chat.id)
 
             bot_state.broadcast_state[call.message.chat.id] = state
 
@@ -1624,19 +1818,58 @@ def handle_message(message):
             broadcast_bot.is_admin(message.chat.id)):
         return
 
+    # Debug logging for forwarded messages
+    if message.forward_from_chat:
+        logger.info(f"Forwarded message detected: {message.content_type} from {message.forward_from_chat.title}")
+        logger.info(f"Message caption: {message.caption}")
+        logger.info(f"User state: {bot_state.broadcast_state.get(message.chat.id)}")
+
     try:
         state = bot_state.broadcast_state.get(message.chat.id)
 
         # Handle broadcast message
         if state and state.get("step") == "waiting_msg":
-            state["message"] = message
-            state["step"] = "ask_repost"
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
-                types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
-            )
-            bot.send_message(message.chat.id, "♻️ Do you want to Auto Repost this message?", reply_markup=markup)
+            # Check if it's a forwarded message
+            if message.forward_from_chat:
+                # Handle forwarded message for broadcast
+                state["message"] = message
+                state["step"] = "ask_repost"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
+                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
+                )
+                
+                # Show detailed message preview
+                preview_text = f"📢 **Forwarded Message Preview:**\n\n"
+                preview_text += f"**Type:** {message.content_type}\n"
+                preview_text += f"**From Channel:** {message.forward_from_chat.title}\n"
+                if message.caption:
+                    preview_text += f"**Caption:** {message.caption[:150]}{'...' if len(message.caption) > 150 else ''}\n"
+                else:
+                    preview_text += f"**Caption:** No caption\n"
+                preview_text += f"**Message ID:** {message.message_id}\n"
+                preview_text += f"**Forward Date:** {message.forward_date}\n\n"
+                preview_text += "♻️ Do you want to Auto Repost this forwarded message?"
+                
+                try:
+                    bot.send_message(message.chat.id, preview_text, reply_markup=markup, parse_mode="Markdown")
+                    logger.info(f"Forwarded message preview sent successfully for {message.content_type}")
+                except Exception as e:
+                    # Fallback without Markdown
+                    bot.send_message(message.chat.id, preview_text, reply_markup=markup)
+                    logger.error(f"Error sending preview with Markdown: {e}")
+            else:
+                # Handle regular message for broadcast
+                state["message"] = message
+                state["step"] = "ask_repost"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
+                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
+                )
+                bot.send_message(message.chat.id, "♻️ Do you want to Auto Repost this message?", reply_markup=markup)
+                logger.info(f"Regular message preview sent successfully for {message.content_type}")
             return
 
         # Handle repost time input
@@ -1674,10 +1907,24 @@ def handle_message(message):
         # Handle scheduled broadcast message
         if state and state.get("step") == "schedule_msg":
             state["message"] = message
-            state["step"] = "schedule_time"
+            hours = state.get("hours", 1)  # Default 1 hour if not specified
+            
+            # Calculate schedule time
+            schedule_time = datetime.now() + timedelta(hours=hours)
+            state["schedule_time"] = schedule_time
+            state["step"] = "schedule_confirm"
+            
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Confirm Schedule", callback_data="confirm_schedule"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_schedule"),
+            )
+            
             bot.send_message(
                 message.chat.id,
-                "⏰ **Schedule Time**\n\nEnter the time to schedule this broadcast.\n\n**Format:** `YYYY-MM-DD HH:MM`\n**Example:** `2024-01-15 14:30`"
+                f"📅 **Schedule Confirmation**\n\n**Message:** {message.content_type}\n**Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n**Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`\n\nConfirm to schedule this broadcast?",
+                reply_markup=markup,
+                parse_mode="Markdown"
             )
             return
 
@@ -1700,7 +1947,7 @@ def handle_message(message):
                 
                 bot.send_message(
                     message.chat.id,
-                    f"📅 **Schedule Confirmation**\n\n**Message:** {message.content_type}\n**Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n**Channels:** `{broadcast_bot.get_channel_count()}`\n\nConfirm to schedule this broadcast?",
+                    f"📅 **Schedule Confirmation**\n\n**Message:** {message.content_type}\n**Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n**Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`\n\nConfirm to schedule this broadcast?",
                     reply_markup=markup,
                     parse_mode="Markdown"
                 )
@@ -1709,8 +1956,22 @@ def handle_message(message):
                 bot.send_message(message.chat.id, "⚠️ Invalid time format. Use: YYYY-MM-DD HH:MM")
             return
 
-        # Handle forwarded messages (auto-detect channels)
+        # Handle forwarded messages (auto-detect channels OR broadcast)
         if message.forward_from_chat and message.forward_from_chat.type in ['channel', 'supergroup']:
+            # Check if user is in broadcast mode
+            if state and state.get("step") == "waiting_msg":
+                # User wants to broadcast this forwarded message
+                state["message"] = message
+                state["step"] = "ask_repost"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
+                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
+                )
+                bot.send_message(message.chat.id, "♻️ Do you want to Auto Repost this forwarded message?", reply_markup=markup)
+                return
+            
+            # Regular channel detection (not in broadcast mode)
             try:
                 channel_id = message.forward_from_chat.id
                 channel_title = message.forward_from_chat.title
@@ -1720,7 +1981,7 @@ def handle_message(message):
                 try:
                     member = bot.get_chat_member(channel_id, message.chat.id)
                     if member.status in ['administrator', 'creator']:
-                        if broadcast_bot.add_channel(channel_id):
+                        if broadcast_bot.add_channel(channel_id, message.chat.id):
                             success_msg = f"✅ **Channel Added Successfully!**\n\n📢 **Channel:** `{channel_title}`\n🆔 **ID:** `{channel_id}`"
                             if channel_username:
                                 success_msg += f"\n🔗 **Username:** @{channel_username}"
@@ -1840,7 +2101,7 @@ def handle_message(message):
                     member = bot.get_chat_member(ch_id, message.chat.id)
                     
                     if member.status in ['administrator', 'creator']:
-                        if broadcast_bot.add_channel(ch_id):
+                        if broadcast_bot.add_channel(ch_id, message.chat.id):
                             success_msg = f"✅ **Channel Added Successfully!**\n\n📢 **Channel:** `{chat_info.title}`\n🆔 **ID:** `{ch_id}`"
                             if hasattr(chat_info, 'username') and chat_info.username:
                                 success_msg += f"\n🔗 **Username:** @{chat_info.username}"
@@ -1880,10 +2141,19 @@ def finish_broadcast(chat_id: int):
         repost_time = state.get("repost_time")
         delete_time = state.get("delete_time")
 
+        # Log message details for debugging
+        logger.info(f"Starting broadcast for user {chat_id}")
+        logger.info(f"Message type: {message.content_type}")
+        logger.info(f"Message ID: {message.message_id}")
+        if message.forward_from_chat:
+            logger.info(f"Forwarded from: {message.forward_from_chat.title}")
+        if message.caption:
+            logger.info(f"Caption: {message.caption[:100]}...")
+
         # Generate unique broadcast ID
         broadcast_id = f"broadcast_{chat_id}_{int(time.time())}"
         
-        channels = broadcast_bot.get_all_channels()
+        channels = broadcast_bot.get_all_channels(chat_id)
         sent_count = 0
         failed_count = 0
         failed_channels = []
@@ -1896,13 +2166,86 @@ def finish_broadcast(chat_id: int):
                 if message.content_type == "text":
                     sent = bot.send_message(channel_id, message.text)
                 elif message.content_type == "photo":
-                    sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=message.caption)
+                    # Handle photo with caption (text, links, formatting)
+                    caption = message.caption or ""
+                    
+                    # Simple and reliable method - try forwarding first, then sending
+                    try:
+                        # Method 1: Forward the original message (preserves everything)
+                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                        logger.info(f"Photo forwarded successfully to {channel_id}")
+                    except Exception as forward_error:
+                        logger.warning(f"Forward failed, trying to send: {forward_error}")
+                        try:
+                            # Method 2: Send photo with caption
+                            sent = bot.send_photo(
+                                channel_id, 
+                                message.photo[-1].file_id, 
+                                caption=caption
+                            )
+                            logger.info(f"Photo sent successfully to {channel_id}")
+                        except Exception as send_error:
+                            logger.error(f"Photo send failed to {channel_id}: {send_error}")
+                            raise send_error
                 elif message.content_type == "video":
-                    sent = bot.send_video(channel_id, message.video.file_id, caption=message.caption)
+                    # Handle video with caption (text, links, formatting)
+                    caption = message.caption or ""
+                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                    
+                    try:
+                        sent = bot.send_video(
+                            channel_id, 
+                            message.video.file_id, 
+                            caption=caption,
+                            parse_mode=parse_mode
+                        )
+                    except Exception as caption_error:
+                        logger.warning(f"Markdown parsing failed for video caption, sending as plain text: {caption_error}")
+                        sent = bot.send_video(
+                            channel_id, 
+                            message.video.file_id, 
+                            caption=caption
+                        )
+                        
                 elif message.content_type == "document":
-                    sent = bot.send_document(channel_id, message.document.file_id, caption=message.caption)
+                    # Handle document with caption (text, links, formatting)
+                    caption = message.caption or ""
+                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                    
+                    try:
+                        sent = bot.send_document(
+                            channel_id, 
+                            message.document.file_id, 
+                            caption=caption,
+                            parse_mode=parse_mode
+                        )
+                    except Exception as caption_error:
+                        logger.warning(f"Markdown parsing failed for document caption, sending as plain text: {caption_error}")
+                        sent = bot.send_document(
+                            channel_id, 
+                            message.document.file_id, 
+                            caption=caption
+                        )
+                        
                 elif message.content_type == "audio":
-                    sent = bot.send_audio(channel_id, message.audio.file_id, caption=message.caption)
+                    # Handle audio with caption (text, links, formatting)
+                    caption = message.caption or ""
+                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                    
+                    try:
+                        sent = bot.send_audio(
+                            channel_id, 
+                            message.audio.file_id, 
+                            caption=caption,
+                            parse_mode=parse_mode
+                        )
+                    except Exception as caption_error:
+                        logger.warning(f"Markdown parsing failed for audio caption, sending as plain text: {caption_error}")
+                        sent = bot.send_audio(
+                            channel_id, 
+                            message.audio.file_id, 
+                            caption=caption
+                        )
                 else:
                     sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
 
