@@ -1797,69 +1797,56 @@ Choose an action:
             bot.send_message(call.message.chat.id, "✅ Bot restarted successfully!")
 
         # Repost / Delete flow handling
-        elif call.data in ["repost_yes", "repost_no", "delete_yes", "delete_no"]:
-            if call.data == "repost_yes":
-                state["step"] = "ask_repost_time"
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("⏱ 5 Min", callback_data="repost_5"),
-                    types.InlineKeyboardButton("⏱ 10 Min", callback_data="repost_10"),
-                    types.InlineKeyboardButton("⏱ 15 Min", callback_data="repost_15"),
-                    types.InlineKeyboardButton("⏱ 30 Min", callback_data="repost_30"),
-                    types.InlineKeyboardButton("⏱ 1 Hour", callback_data="repost_1h"),
-                    types.InlineKeyboardButton("⏱ 2 Hours", callback_data="repost_2h"),
-                    types.InlineKeyboardButton("⏱ 6 Hours", callback_data="repost_6h"),
-                    types.InlineKeyboardButton("⏱ 12 Hours", callback_data="repost_12h"),
-                    types.InlineKeyboardButton("⏱ 24 Hours", callback_data="repost_24h"),
-                    types.InlineKeyboardButton("⏱ Custom Time", callback_data="repost_custom"),
-                )
-                bot.send_message(call.message.chat.id, "⏱ **Auto Repost Options**\n\nChoose repost interval:", reply_markup=markup, parse_mode="Markdown")
-            elif call.data == "repost_no":
-                state["repost_time"] = None
-                state["step"] = "ask_autodelete"
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-                )
-                bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
-            elif call.data == "delete_yes":
-                state["step"] = "ask_autodelete_time"
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("🗑 5 Min", callback_data="delete_5"),
-                    types.InlineKeyboardButton("🗑 10 Min", callback_data="delete_10"),
-                    types.InlineKeyboardButton("🗑 15 Min", callback_data="delete_15"),
-                    types.InlineKeyboardButton("🗑 30 Min", callback_data="delete_30"),
-                    types.InlineKeyboardButton("🗑 1 Hour", callback_data="delete_1h"),
-                    types.InlineKeyboardButton("🗑 2 Hours", callback_data="delete_2h"),
-                    types.InlineKeyboardButton("🗑 6 Hours", callback_data="delete_6h"),
-                    types.InlineKeyboardButton("🗑 12 Hours", callback_data="delete_12h"),
-                    types.InlineKeyboardButton("🗑 24 Hours", callback_data="delete_24h"),
-                    types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
-                )
-                bot.send_message(call.message.chat.id, "🗑 **Auto Delete Options**\n\nChoose when to auto delete the broadcasted message:", reply_markup=markup, parse_mode="Markdown")
-            elif call.data == "delete_no":
-                state["delete_time"] = None
-                finish_broadcast(call.message.chat.id)
+        # Auto Repost and Auto Delete Flow
+        elif call.data == "repost_yes":
+            state["step"] = "ask_repost_time"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("⏱ 5 Min", callback_data="repost_5"),
+                types.InlineKeyboardButton("⏱ 10 Min", callback_data="repost_10"),
+                types.InlineKeyboardButton("⏱ 15 Min", callback_data="repost_15"),
+                types.InlineKeyboardButton("⏱ 30 Min", callback_data="repost_30"),
+                types.InlineKeyboardButton("⏱ 1 Hour", callback_data="repost_1h"),
+                types.InlineKeyboardButton("⏱ 2 Hours", callback_data="repost_2h"),
+                types.InlineKeyboardButton("⏱ 6 Hours", callback_data="repost_6h"),
+                types.InlineKeyboardButton("⏱ 12 Hours", callback_data="repost_12h"),
+                types.InlineKeyboardButton("⏱ 24 Hours", callback_data="repost_24h"),
+                types.InlineKeyboardButton("⏱ Custom Time", callback_data="repost_custom"),
+            )
+            bot.send_message(call.message.chat.id, "⏱ **Auto Repost Options**\n\nChoose repost interval:", reply_markup=markup, parse_mode="Markdown")
+            
+        elif call.data == "repost_no":
+            state["repost_time"] = None
+            state["step"] = "ask_autodelete"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
+                types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+            )
+            bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
+            
+        elif call.data == "delete_yes":
+            state["step"] = "ask_autodelete_time"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🗑 5 Min", callback_data="delete_5"),
+                types.InlineKeyboardButton("🗑 10 Min", callback_data="delete_10"),
+                types.InlineKeyboardButton("🗑 15 Min", callback_data="delete_15"),
+                types.InlineKeyboardButton("🗑 30 Min", callback_data="delete_30"),
+                types.InlineKeyboardButton("🗑 1 Hour", callback_data="delete_1h"),
+                types.InlineKeyboardButton("🗑 2 Hours", callback_data="delete_2h"),
+                types.InlineKeyboardButton("🗑 6 Hours", callback_data="delete_6h"),
+                types.InlineKeyboardButton("🗑 12 Hours", callback_data="delete_12h"),
+                types.InlineKeyboardButton("🗑 24 Hours", callback_data="delete_24h"),
+                types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
+            )
+            bot.send_message(call.message.chat.id, "🗑 **Auto Delete Options**\n\nChoose when to auto delete the broadcasted message:", reply_markup=markup, parse_mode="Markdown")
+            
+        elif call.data == "delete_no":
+            state["delete_time"] = None
+            finish_broadcast(call.message.chat.id)
 
-        elif call.data.startswith("delete_"):
-            if call.data == "delete_no":
-                state["delete_time"] = None
-                finish_broadcast(call.message.chat.id)
-            elif call.data == "delete_custom":
-                state["step"] = "ask_autodelete_time"
-                bot.send_message(call.message.chat.id, "⏱ Enter custom delete time in minutes (minimum 1):")
-            else:
-                # Extract time from callback data
-                time_str = call.data.replace("delete_", "")
-                if time_str.endswith("h"):
-                    hours = int(time_str.replace("h", ""))
-                    state["delete_time"] = hours * 60  # Convert to minutes
-                else:
-                    state["delete_time"] = int(time_str)  # Already in minutes
-                finish_broadcast(call.message.chat.id)
-
+        # Handle repost time selection
         elif call.data.startswith("repost_"):
             if call.data == "repost_custom":
                 state["step"] = "ask_repost_time"
@@ -1882,6 +1869,21 @@ Choose an action:
                 )
                 bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
 
+        # Handle delete time selection
+        elif call.data.startswith("delete_"):
+            if call.data == "delete_custom":
+                state["step"] = "ask_autodelete_time"
+                bot.send_message(call.message.chat.id, "⏱ Enter custom delete time in minutes (minimum 1):")
+            else:
+                # Extract time from callback data
+                time_str = call.data.replace("delete_", "")
+                if time_str.endswith("h"):
+                    hours = int(time_str.replace("h", ""))
+                    state["delete_time"] = hours * 60  # Convert to minutes
+                else:
+                    state["delete_time"] = int(time_str)  # Already in minutes
+                finish_broadcast(call.message.chat.id)
+
         bot_state.broadcast_state[call.message.chat.id] = state
 
     except Exception as e:
@@ -1891,10 +1893,20 @@ Choose an action:
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
     """Enhanced message handler with better validation"""
+    
+    # Debug logging
+    logger.info(f"Message received from {message.chat.id}: {message.content_type}")
+    logger.info(f"User state: {bot_state.broadcast_state.get(message.chat.id)}")
+    
     # Check if user is authorized (active users, premium users, or admins)
     if not (broadcast_bot.is_authorized(message.chat.id) or 
             broadcast_bot.is_premium(message.chat.id) or 
             broadcast_bot.is_admin(message.chat.id)):
+        bot.send_message(
+            message.chat.id, 
+            "🚫 **Access Denied!**\n\nYou are not authorized to use this bot.\n\nContact admin to get access.",
+            parse_mode="Markdown"
+        )
         return
 
     # Debug logging for forwarded messages
