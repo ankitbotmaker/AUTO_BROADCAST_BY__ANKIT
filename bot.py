@@ -1,19 +1,31 @@
+#!/usr/bin/env python3
+"""
+Advanced Telegram Broadcast Bot
+Features: Auto Repost, Auto Delete, Scheduled Broadcasts, Analytics, Multi-Channel Management
+Author: ANKIT
+"""
+
 import os
+import time
+import logging
+import threading
+import schedule
+import json
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 import telebot
 from telebot import types
 from pymongo import MongoClient
-import threading
-import time
-import logging
-from datetime import datetime, timedelta
-import json
-from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+import requests
 
 # Load environment variables
-from dotenv import load_dotenv
 load_dotenv()
 
-# Configure logging
+# Configure advanced logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -24,648 +36,790 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Configuration
-BOT_TOKEN = os.getenv("BOT_TOKEN", "7769199668:AAGsMQ6BzCPGu_ONdgnb7QEURkbIb80uyUY")
-MONGO_URL = os.getenv("MONGO_URL", "mongodb+srv://rowojo2049:bga4FhmFXj2GTM5B@cluster0.ggmw5h8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
-OWNER_ID = int(os.getenv("OWNER_ID", "7792539085"))
-ADMIN_IDS = [int(id.strip()) for id in os.getenv("ADMIN_IDS", "7792539085").split(",")]
+# Import config
+try:
+    from config import *
+except ImportError:
+    logger.error("Config file not found!")
+    raise
 
-# Initialize bot
-bot = telebot.TeleBot(BOT_TOKEN)
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN not found!")
 
-# MongoDB setup with error handling
+# MongoDB connection with advanced configuration
 try:
     client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
     client.admin.command('ping')
-    db = client["broadcast_bot"]
+    db = client["advanced_broadcast_bot"]
+    
+    # Collections
     channels_col = db["channels"]
-    broadcast_messages_col = db["broadcast_messages"]  # Store broadcast message IDs
-    users_col = db["users"]  # Store user authentication and premium data
+    broadcast_messages_col = db["broadcast_messages"]
+    users_col = db["users"]
+    scheduled_broadcasts_col = db["scheduled_broadcasts"]
+    analytics_col = db["analytics"]
+    settings_col = db["settings"]
+    
     logger.info("✅ MongoDB connected successfully")
 except Exception as e:
     logger.error(f"❌ MongoDB connection failed: {e}")
     raise
 
-# Global state management
-class BotState:
-    def __init__(self):
-        self.broadcast_state: Dict[int, Dict[str, Any]] = {}
-        self.active_reposts: Dict[int, Dict[str, Any]] = {}
-        self.user_sessions: Dict[int, Dict[str, Any]] = {}
-        self.broadcast_messages: Dict[int, Dict[str, list]] = {}  # {chat_id: {channel_id: [message_ids]}}
+# Initialize bot
+bot = telebot.TeleBot(BOT_TOKEN)
 
-bot_state = BotState()
+# Convert ADMIN_IDS to list
+if isinstance(ADMIN_IDS, str):
+    ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS.split(",") if id.strip()]
+else:
+    ADMIN_IDS = []
 
-class BroadcastBot:
+class AdvancedBotState:
     def __init__(self):
-        self.bot = bot
+        self.broadcast_state = {}
+        self.active_reposts = {}
+        self.scheduled_tasks = {}
+        self.analytics_cache = {}
+        self.user_sessions = {}
+
+bot_state = AdvancedBotState()
+
+class AdvancedBroadcastBot:
+    def __init__(self):
         self.channels_col = channels_col
+        self.broadcast_messages_col = broadcast_messages_col
         self.users_col = users_col
+        self.scheduled_broadcasts_col = scheduled_broadcasts_col
+        self.analytics_col = analytics_col
+        self.settings_col = settings_col
         
-    def is_owner(self, user_id: int) -> bool:
-        """Check if user is the owner"""
-        return user_id == OWNER_ID
-    
+        # Initialize analytics
+        self.init_analytics()
+        
+        # Start background tasks
+        self.start_background_tasks()
+
+    def init_analytics(self):
+        """Initialize analytics collection"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        analytics = self.analytics_col.find_one({"date": today})
+        if not analytics:
+            self.analytics_col.insert_one({
+                "date": today,
+                "total_broadcasts": 0,
+                "total_messages_sent": 0,
+                "active_users": 0,
+                "new_channels_added": 0,
+                "auto_reposts": 0,
+                "auto_deletes": 0,
+                "failed_broadcasts": 0
+            })
+
+    def start_background_tasks(self):
+        """Start background scheduled tasks"""
+        def run_scheduler():
+            while True:
+                schedule.run_pending()
+                time.sleep(60)
+        
+        threading.Thread(target=run_scheduler, daemon=True).start()
+        
+        # Schedule daily analytics reset
+        schedule.every().day.at("00:00").do(self.reset_daily_analytics)
+        
+        # Schedule cleanup of old data
+        schedule.every().week.do(self.cleanup_old_data)
+
+    def reset_daily_analytics(self):
+        """Reset daily analytics"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        self.analytics_col.insert_one({
+            "date": today,
+            "total_broadcasts": 0,
+            "total_messages_sent": 0,
+            "active_users": 0,
+            "new_channels_added": 0,
+            "auto_reposts": 0,
+            "auto_deletes": 0,
+            "failed_broadcasts": 0
+        })
+        logger.info("✅ Daily analytics reset")
+
+    def cleanup_old_data(self):
+        """Cleanup old broadcast data"""
+        cutoff_date = datetime.now() - timedelta(days=30)
+        self.broadcast_messages_col.delete_many({"timestamp": {"$lt": cutoff_date}})
+        logger.info("✅ Old broadcast data cleaned up")
+
+    def update_analytics(self, metric: str, increment: int = 1):
+        """Update analytics metrics"""
+        today = datetime.now().strftime('%Y-%m-%d')
+        self.analytics_col.update_one(
+            {"date": today},
+            {"$inc": {metric: increment}},
+            upsert=True
+        )
+
     def is_admin(self, user_id: int) -> bool:
-        """Check if user is admin"""
-        return user_id in ADMIN_IDS or user_id == OWNER_ID
+        return user_id in ADMIN_IDS
     
+    def is_owner(self, user_id: int) -> bool:
+        return str(user_id) == OWNER_ID
+
     def is_authorized(self, user_id: int) -> bool:
-        """Check if user is authorized to use the bot"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if user:
-                return user.get("is_active", False)
-            return False
-        except Exception as e:
-            logger.error(f"Error checking user authorization: {e}")
-            return False
-    
+        # Only premium users and admins can use the bot
+        if self.is_admin(user_id):
+            return True
+        return self.is_premium(user_id)
+
     def is_premium(self, user_id: int) -> bool:
-        """Check if user has premium access"""
+        user = self.users_col.find_one({"user_id": user_id})
+        if not user:
+            return False
+        if not user.get("is_premium", False):
+            return False
+        if user.get("premium_expires") and user["premium_expires"] < datetime.now():
+            return False
+        return True
+
+    def add_user(self, user_id: int, username: str, first_name: str, last_name: str):
+        """Add or update user with advanced features"""
+        user_data = {
+            "user_id": user_id,
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+            "is_active": True,
+            "is_premium": False,
+            "created_at": datetime.now(),
+            "last_active": datetime.now(),
+            "total_broadcasts": 0,
+            "total_channels": 0,
+            "subscription_type": "free",
+            "usage_stats": {
+                "daily_broadcasts": 0,
+                "weekly_broadcasts": 0,
+                "monthly_broadcasts": 0
+            }
+        }
+        
+        existing_user = self.users_col.find_one({"user_id": user_id})
+        if existing_user:
+            user_data.update({
+                "created_at": existing_user.get("created_at", datetime.now()),
+                "total_broadcasts": existing_user.get("total_broadcasts", 0),
+                "total_channels": existing_user.get("total_channels", 0),
+                "is_premium": existing_user.get("is_premium", False),
+                "subscription_type": existing_user.get("subscription_type", "free")
+            })
+        
+        self.users_col.update_one(
+            {"user_id": user_id},
+            {"$set": user_data},
+            upsert=True
+        )
+
+    def add_channel(self, channel_id: int, user_id: int, channel_info: dict = None) -> bool:
+        """Add channel with advanced validation"""
         try:
+            # Check channel limit
+            user_channels = self.get_channel_count(user_id)
             user = self.users_col.find_one({"user_id": user_id})
-            if user:
-                return user.get("is_premium", False)
-            return False
-        except Exception as e:
-            logger.error(f"Error checking premium status: {e}")
-            return False
-    
-    def add_user(self, user_id: int, username: str = None, first_name: str = None, last_name: str = None) -> bool:
-        """Add a new user to the database"""
-        try:
-            if not self.users_col.find_one({"user_id": user_id}):
-                self.users_col.insert_one({
-                    "user_id": user_id,
-                    "username": username,
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "is_active": False,
-                    "is_premium": False,
-                    "premium_expires": None,
-                    "added_at": datetime.now(),
-                    "last_activity": datetime.now()
-                })
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error adding user {user_id}: {e}")
-            return False
-    
-    def activate_user(self, user_id: int, activated_by: int) -> bool:
-        """Activate a user (give basic access)"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if not user:
-                # Create user if doesn't exist
-                self.users_col.insert_one({
-                    "user_id": user_id,
-                    "username": None,
-                    "first_name": f"User_{user_id}",
-                    "last_name": None,
-                    "is_active": True,
-                    "is_premium": False,
-                    "premium_expires": None,
-                    "activated_by": activated_by,
-                    "activated_at": datetime.now(),
-                    "added_at": datetime.now(),
-                    "last_activity": datetime.now()
-                })
-                return True
             
-            result = self.users_col.update_one(
+            max_channels = MAX_CHANNELS_PER_USER
+            if user and user.get("is_premium"):
+                max_channels = MAX_CHANNELS_PER_USER * 2
+            
+            if user_channels >= max_channels:
+                return False
+            
+            # Check if channel already exists
+            existing = self.channels_col.find_one({"channel_id": channel_id, "user_id": user_id})
+            if existing:
+                return False
+            
+            # Add channel with metadata
+            channel_data = {
+                "channel_id": channel_id,
+                "user_id": user_id,
+                "added_at": datetime.now(),
+                "last_broadcast": None,
+                "total_broadcasts": 0,
+                "is_active": True,
+                "channel_info": channel_info or {},
+                "settings": {
+                    "auto_repost": False,
+                    "auto_delete": False,
+                    "broadcast_delay": BROADCAST_DELAY
+                }
+            }
+            
+            self.channels_col.insert_one(channel_data)
+            
+            # Update user stats
+            self.users_col.update_one(
                 {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_active": True,
-                        "activated_by": activated_by,
-                        "activated_at": datetime.now(),
-                        "last_activity": datetime.now()
-                    }
-                }
+                {"$inc": {"total_channels": 1}}
             )
-            return result.modified_count > 0
-        except Exception as e:
-            logger.error(f"Error activating user {user_id}: {e}")
-            return False
-    
-    def deactivate_user(self, user_id: int, deactivated_by: int) -> bool:
-        """Deactivate a user"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if not user:
-                # Create user if doesn't exist (but deactivated)
-                self.users_col.insert_one({
-                    "user_id": user_id,
-                    "username": None,
-                    "first_name": f"User_{user_id}",
-                    "last_name": None,
-                    "is_active": False,
-                    "is_premium": False,
-                    "premium_expires": None,
-                    "deactivated_by": deactivated_by,
-                    "deactivated_at": datetime.now(),
-                    "added_at": datetime.now(),
-                    "last_activity": datetime.now()
-                })
-                return True
             
-            result = self.users_col.update_one(
-                {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_active": False,
-                        "is_premium": False,
-                        "premium_expires": None,
-                        "deactivated_by": deactivated_by,
-                        "deactivated_at": datetime.now(),
-                        "last_activity": datetime.now()
-                    }
-                }
-            )
-            return result.modified_count > 0
-        except Exception as e:
-            logger.error(f"Error deactivating user {user_id}: {e}")
-            return False
-    
-    def give_premium(self, user_id: int, days: int, given_by: int) -> bool:
-        """Give premium access to a user"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if not user:
-                # Create user if doesn't exist
-                self.users_col.insert_one({
-                    "user_id": user_id,
-                    "username": None,
-                    "first_name": f"User_{user_id}",
-                    "last_name": None,
-                    "is_active": True,
-                    "is_premium": True,
-                    "premium_expires": datetime.now() + timedelta(days=days),
-                    "premium_given_by": given_by,
-                    "premium_given_at": datetime.now(),
-                    "added_at": datetime.now(),
-                    "last_activity": datetime.now()
-                })
-                return True
+            # Update analytics
+            self.update_analytics("new_channels_added")
             
-            # Calculate premium expiry
-            if user.get("premium_expires") and user["premium_expires"] > datetime.now():
-                # Extend existing premium
-                new_expiry = user["premium_expires"] + timedelta(days=days)
-            else:
-                # Start new premium from now
-                new_expiry = datetime.now() + timedelta(days=days)
+            return True
             
-            result = self.users_col.update_one(
-                {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_active": True,
-                        "is_premium": True,
-                        "premium_expires": new_expiry,
-                        "premium_given_by": given_by,
-                        "premium_given_at": datetime.now(),
-                        "last_activity": datetime.now()
-                    }
-                }
-            )
-            return result.modified_count > 0
         except Exception as e:
-            logger.error(f"Error giving premium to user {user_id}: {e}")
+            logger.error(f"Error adding channel: {e}")
             return False
-    
-    def revoke_premium(self, user_id: int, revoked_by: int) -> bool:
-        """Revoke premium access from a user"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if not user:
-                # Create user if doesn't exist (but without premium)
-                self.users_col.insert_one({
-                    "user_id": user_id,
-                    "username": None,
-                    "first_name": f"User_{user_id}",
-                    "last_name": None,
-                    "is_active": True,
-                    "is_premium": False,
-                    "premium_expires": None,
-                    "premium_revoked_by": revoked_by,
-                    "premium_revoked_at": datetime.now(),
-                    "added_at": datetime.now(),
-                    "last_activity": datetime.now()
-                })
-                return True
-            
-            result = self.users_col.update_one(
-                {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_premium": False,
-                        "premium_expires": None,
-                        "premium_revoked_by": revoked_by,
-                        "premium_revoked_at": datetime.now(),
-                        "last_activity": datetime.now()
-                    }
-                }
-            )
-            return result.modified_count > 0
-        except Exception as e:
-            logger.error(f"Error revoking premium from user {user_id}: {e}")
-            return False
-    
-    def get_user_info(self, user_id: int) -> dict:
-        """Get user information"""
-        try:
-            user = self.users_col.find_one({"user_id": user_id})
-            if user:
-                return {
-                    "user_id": user["user_id"],
-                    "username": user.get("username"),
-                    "first_name": user.get("first_name"),
-                    "last_name": user.get("last_name"),
-                    "is_active": user.get("is_active", False),
-                    "is_premium": user.get("is_premium", False),
-                    "premium_expires": user.get("premium_expires"),
-                    "added_at": user.get("added_at"),
-                    "last_activity": user.get("last_activity")
-                }
-            return None
-        except Exception as e:
-            logger.error(f"Error getting user info for {user_id}: {e}")
-            return None
-    
-    def get_all_users(self) -> list:
-        """Get all users from database"""
-        try:
-            return list(self.users_col.find({}, {"_id": 0}))
-        except Exception as e:
-            logger.error(f"Error getting all users: {e}")
-            return []
-    
-    def get_active_users(self) -> list:
-        """Get all active users"""
-        try:
-            return list(self.users_col.find({"is_active": True}, {"_id": 0}))
-        except Exception as e:
-            logger.error(f"Error getting active users: {e}")
-            return []
-    
-    def get_premium_users(self) -> list:
-        """Get all premium users"""
-        try:
-            return list(self.users_col.find({"is_premium": True}, {"_id": 0}))
-        except Exception as e:
-            logger.error(f"Error getting premium users: {e}")
-            return []
-    
-    def get_channel_count(self, user_id: int = None) -> int:
-        """Get total number of channels for a user"""
-        try:
-            if user_id:
-                return self.channels_col.count_documents({"user_id": user_id})
-            else:
-                return self.channels_col.count_documents({})
-        except Exception as e:
-            logger.error(f"Error getting channel count for user {user_id}: {e}")
-            return 0
-    
-    def add_channel(self, channel_id: int, user_id: int) -> bool:
-        """Add a channel to the user's personal database"""
-        try:
-            # Check if channel already exists for this user
-            if not self.channels_col.find_one({"channel_id": channel_id, "user_id": user_id}):
-                self.channels_col.insert_one({
-                    "channel_id": channel_id, 
-                    "user_id": user_id,
-                    "added_at": datetime.now()
-                })
-                return True
-            return False
-        except Exception as e:
-            logger.error(f"Error adding channel {channel_id} for user {user_id}: {e}")
-            return False
-    
+
     def remove_channel(self, channel_id: int, user_id: int) -> bool:
-        """Remove a channel from the user's personal database"""
+        """Remove channel with cleanup"""
         try:
             result = self.channels_col.delete_one({"channel_id": channel_id, "user_id": user_id})
-            return result.deleted_count > 0
-        except Exception as e:
-            logger.error(f"Error removing channel {channel_id} for user {user_id}: {e}")
+            if result.deleted_count > 0:
+                # Update user stats
+                self.users_col.update_one(
+                    {"user_id": user_id},
+                    {"$inc": {"total_channels": -1}}
+                )
+                
+                # Remove related broadcast messages
+                self.broadcast_messages_col.delete_many({
+                    "user_id": user_id,
+                    "channel_id": channel_id
+                })
+                
+                return True
             return False
-    
-    def get_all_channels(self, user_id: int = None) -> list:
-        """Get all channels from database for a specific user"""
-        try:
-            if user_id:
-                return list(self.channels_col.find({"user_id": user_id}, {"channel_id": 1, "_id": 0}))
-            else:
-                return list(self.channels_col.find({}, {"channel_id": 1, "_id": 0}))
         except Exception as e:
-            logger.error(f"Error getting channels for user {user_id}: {e}")
-            return []
-    
-    def save_broadcast_message(self, owner_id: int, channel_id: int, message_id: int, broadcast_id: str):
-        """Save broadcast message ID to database"""
+            logger.error(f"Error removing channel: {e}")
+            return False
+
+    def get_all_channels(self, user_id: int) -> List[dict]:
+        """Get all channels with advanced filtering"""
         try:
-            broadcast_messages_col.insert_one({
-                "owner_id": owner_id,
+            return list(self.channels_col.find(
+                {"user_id": user_id, "is_active": True}
+            ).sort("added_at", -1))
+        except Exception as e:
+            logger.error(f"Error getting channels: {e}")
+            return []
+
+    def get_channel_count(self, user_id: int) -> int:
+        """Get channel count"""
+        try:
+            return self.channels_col.count_documents({"user_id": user_id, "is_active": True})
+        except Exception as e:
+            logger.error(f"Error counting channels: {e}")
+            return 0
+
+    def save_broadcast_message(self, user_id: int, channel_id: int, message_id: int, broadcast_id: str, message_type: str = "broadcast"):
+        """Save broadcast message with metadata"""
+        try:
+            self.broadcast_messages_col.insert_one({
+                "user_id": user_id,
                 "channel_id": channel_id,
                 "message_id": message_id,
                 "broadcast_id": broadcast_id,
-                "user_id": owner_id,  # Add user_id for personal tracking
-                "timestamp": datetime.now()
+                "message_type": message_type,
+                "timestamp": datetime.now(),
+                "status": "sent",
+                "scheduled_delete": None,
+                "auto_repost_enabled": False
             })
+            
+            # Update channel stats
+            self.channels_col.update_one(
+                {"channel_id": channel_id, "user_id": user_id},
+                {
+                    "$inc": {"total_broadcasts": 1},
+                    "$set": {"last_broadcast": datetime.now()}
+                }
+            )
+            
         except Exception as e:
             logger.error(f"Error saving broadcast message: {e}")
-    
-    def get_broadcast_messages(self, owner_id: int, broadcast_id: str = None) -> list:
-        """Get broadcast messages for an owner"""
+
+    def get_broadcast_messages(self, user_id: int, limit: int = 50) -> List[dict]:
+        """Get broadcast messages with pagination"""
         try:
-            query = {"owner_id": owner_id}
-            if broadcast_id:
-                query["broadcast_id"] = broadcast_id
-            return list(broadcast_messages_col.find(query))
+            return list(self.broadcast_messages_col.find(
+                {"user_id": user_id}
+            ).sort("timestamp", -1).limit(limit))
         except Exception as e:
             logger.error(f"Error getting broadcast messages: {e}")
             return []
-    
-    def delete_broadcast_messages(self, owner_id: int, broadcast_id: str = None) -> bool:
-        """Delete broadcast messages from database"""
-        try:
-            query = {"owner_id": owner_id}
-            if broadcast_id:
-                query["broadcast_id"] = broadcast_id
-            result = broadcast_messages_col.delete_many(query)
-            return result.deleted_count > 0
-        except Exception as e:
-            logger.error(f"Error deleting broadcast messages: {e}")
-            return False
-    
-    def get_broadcast_stats(self, owner_id: int) -> dict:
-        """Get broadcast statistics for a specific user"""
-        try:
-            total_messages = broadcast_messages_col.count_documents({"owner_id": owner_id})
-            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-            today_messages = broadcast_messages_col.count_documents({
-                "owner_id": owner_id,
-                "timestamp": {"$gte": today}
-            })
-            
-            # Get unique broadcast IDs
-            broadcast_ids = broadcast_messages_col.distinct("broadcast_id", {"owner_id": owner_id})
-            
-            return {
-                "total_messages": total_messages,
-                "today_messages": today_messages,
-                "total_broadcasts": len(broadcast_ids),
-                "channels_count": self.get_channel_count(owner_id)
-            }
-        except Exception as e:
-            logger.error(f"Error getting broadcast stats: {e}")
-            return {"total_messages": 0, "today_messages": 0, "total_broadcasts": 0, "channels_count": 0}
-    
-    def schedule_broadcast(self, owner_id: int, message, channels: list, schedule_time: datetime, broadcast_id: str):
+
+    def schedule_broadcast(self, user_id: int, message_data: dict, schedule_time: datetime) -> str:
         """Schedule a broadcast for later"""
         try:
-            # Save scheduled broadcast info
-            scheduled_col = db["scheduled_broadcasts"]
-            scheduled_col.insert_one({
-                "owner_id": owner_id,
+            broadcast_id = f"scheduled_{user_id}_{int(time.time())}"
+            
+            self.scheduled_broadcasts_col.insert_one({
                 "broadcast_id": broadcast_id,
-                "message_data": {
-                    "content_type": message.content_type,
-                    "text": message.text if message.content_type == "text" else None,
-                    "file_id": self._get_file_id(message),
-                    "caption": message.caption
-                },
-                "channels": channels,
+                "user_id": user_id,
+                "message_data": message_data,
                 "schedule_time": schedule_time,
-                "status": "pending"
+                "status": "pending",
+                "created_at": datetime.now()
             })
-            return True
+            
+            return broadcast_id
+            
         except Exception as e:
             logger.error(f"Error scheduling broadcast: {e}")
+            return None
+
+    def get_user_analytics(self, user_id: int) -> dict:
+        """Get user analytics"""
+        try:
+            user = self.users_col.find_one({"user_id": user_id})
+            if not user:
+                return {}
+                
+            total_channels = self.get_channel_count(user_id)
+            total_broadcasts = user.get("total_broadcasts", 0)
+            
+            # Get recent broadcast stats
+            recent_broadcasts = self.broadcast_messages_col.count_documents({
+                "user_id": user_id,
+                "timestamp": {"$gte": datetime.now() - timedelta(days=7)}
+            })
+            
+            return {
+                "total_channels": total_channels,
+                "total_broadcasts": total_broadcasts,
+                "recent_broadcasts": recent_broadcasts,
+                "subscription_type": user.get("subscription_type", "free"),
+                "member_since": user.get("created_at", datetime.now()).strftime("%Y-%m-%d"),
+                "last_active": user.get("last_active", datetime.now()).strftime("%Y-%m-%d %H:%M")
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting user analytics: {e}")
+            return {}
+
+    def make_premium(self, user_id: int, days: int = 30, plan_type: str = "premium") -> bool:
+        """Make user premium"""
+        try:
+            premium_expires = datetime.now() + timedelta(days=days)
+            
+            self.users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "is_premium": True,
+                        "premium_expires": premium_expires,
+                        "subscription_type": plan_type,
+                        "premium_activated": datetime.now()
+                    }
+                }
+            )
+            
+            logger.info(f"User {user_id} made premium for {days} days")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error making user premium: {e}")
             return False
-    
-    def _get_file_id(self, message) -> str:
-        """Get file ID from message"""
-        if message.content_type == "photo":
-            return message.photo[-1].file_id
-        elif message.content_type == "video":
-            return message.video.file_id
-        elif message.content_type == "document":
-            return message.document.file_id
-        elif message.content_type == "audio":
-            return message.audio.file_id
-        return None
-    
-    def get_user_channels(self, user_id: int) -> list:
-        """Get channels where user has admin rights"""
+
+    def remove_premium(self, user_id: int) -> bool:
+        """Remove premium from user"""
         try:
-            # Get user's chat member updates to find channels
-            # This is a simplified approach - in real implementation you'd need to store this data
-            user_channels = []
+            self.users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "is_premium": False,
+                        "premium_expires": None,
+                        "subscription_type": "free"
+                    }
+                }
+            )
             
-            # Try to get updates from bot's getUpdates method
-            updates = self.bot.get_updates()
-            
-            for update in updates:
-                if hasattr(update, 'my_chat_member') and update.my_chat_member:
-                    chat = update.my_chat_member.chat
-                    if chat.type in ['channel', 'supergroup']:
-                        try:
-                            # Check if user is admin in this chat
-                            member = self.bot.get_chat_member(chat.id, user_id)
-                            if member.status in ['administrator', 'creator']:
-                                user_channels.append({
-                                    'chat_id': chat.id,
-                                    'title': chat.title,
-                                    'type': chat.type,
-                                    'username': getattr(chat, 'username', None)
-                                })
-                        except Exception as e:
-                            logger.error(f"Error checking member status for {chat.id}: {e}")
-                            continue
-            
-            return user_channels
+            logger.info(f"Premium removed from user {user_id}")
+            return True
             
         except Exception as e:
-            logger.error(f"Error getting user channels: {e}")
-            return []
-    
-    def get_accessible_channels(self, user_id: int) -> list:
-        """Get all channels user can access (simplified version)"""
+            logger.error(f"Error removing premium: {e}")
+            return False
+
+    def get_premium_users(self) -> List[dict]:
+        """Get all premium users"""
         try:
-            # This is a simplified approach
-            # In a real implementation, you'd need to maintain a list of user's channels
-            # For now, we'll return an empty list and ask user to manually add channels
-            
-            # You can extend this by storing user's channel access in database
-            return []
-            
+            return list(self.users_col.find({
+                "is_premium": True,
+                "premium_expires": {"$gt": datetime.now()}
+            }))
         except Exception as e:
-            logger.error(f"Error getting accessible channels: {e}")
+            logger.error(f"Error getting premium users: {e}")
+            return []
+
+    def get_expired_premium_users(self) -> List[dict]:
+        """Get expired premium users"""
+        try:
+            return list(self.users_col.find({
+                "is_premium": True,
+                "premium_expires": {"$lt": datetime.now()}
+            }))
+        except Exception as e:
+            logger.error(f"Error getting expired premium users: {e}")
             return []
 
 # Initialize bot instance
-broadcast_bot = BroadcastBot()
+broadcast_bot = AdvancedBroadcastBot()
 
-def auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[int], stop_flag: Dict[str, bool]):
-    """Background repost function with improved error handling"""
-    logger.info(f"Starting auto repost for chat {chat_id}")
+def advanced_auto_delete(chat_id: int, msg_id: int, delete_time: int):
+    """Advanced auto delete with retry and logging"""
+    try:
+        logger.info(f"⏰ Auto delete scheduled: {msg_id} from {chat_id} in {delete_time} minutes")
+        time.sleep(delete_time * 60)
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                result = bot.delete_message(chat_id, msg_id)
+                if result:
+                    logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+                    broadcast_bot.update_analytics("auto_deletes")
+                    
+                    # Update message status
+                    broadcast_bot.broadcast_messages_col.update_one(
+                        {"channel_id": chat_id, "message_id": msg_id},
+                        {"$set": {"status": "deleted", "deleted_at": datetime.now()}}
+                    )
+                    break
+                else:
+                    if attempt < max_retries - 1:
+                        time.sleep(5)  # Wait before retry
+                        continue
+                    else:
+                        logger.warning(f"⚠️ Failed to delete message {msg_id} from {chat_id} after {max_retries} attempts")
+                        
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
+                    time.sleep(5)
+                else:
+                    logger.error(f"❌ Auto delete failed for {chat_id} after {max_retries} attempts: {e}")
+                    
+    except Exception as e:
+        logger.error(f"❌ Auto delete function error: {e}")
+
+def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[int], stop_flag: Dict[str, bool]):
+    """Advanced auto repost with enhanced features"""
+    logger.info(f"🔄 Starting auto repost for user {chat_id}")
+    repost_count = 0
     
     while not stop_flag.get("stop", False):
         try:
+            logger.info(f"🔄 Auto repost cycle {repost_count + 1} starting...")
             time.sleep(repost_time * 60)
             if stop_flag.get("stop", False):
+                logger.info(f"🔄 Auto repost stopped for user {chat_id}")
                 break
                 
-            # Get channels for this specific user
             channels = broadcast_bot.get_all_channels(chat_id)
+            logger.info(f"🔄 Got {len(channels)} channels for repost")
             success_count = 0
             failed_count = 0
             
             for ch in channels:
                 try:
+                    if stop_flag.get("stop", False):
+                        break
+                        
                     sent = None
                     channel_id = ch["channel_id"]
+                    logger.info(f"🔄 Reposting to channel {channel_id}")
                     
+                    # Add delay between channels
+                    delay = ch.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
+                    time.sleep(delay)
+                    
+                    # Send message based on type
                     if message.content_type == "text":
-                        sent = bot.send_message(channel_id, message.text)
+                        logger.info(f"🔄 Sending text to {channel_id}")
+                        sent = bot.send_message(channel_id, message.text, parse_mode="HTML")
                     elif message.content_type == "photo":
-                        # Handle photo with caption (text, links, formatting)
                         caption = message.caption or ""
-                        
-                        # Simple and reliable method - try forwarding first, then sending
+                        logger.info(f"🔄 Sending photo to {channel_id}")
                         try:
-                            # Method 1: Forward the original message (preserves everything)
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-                            logger.info(f"Photo auto-forwarded successfully to {channel_id}")
-                        except Exception as forward_error:
-                            logger.warning(f"Auto-forward failed, trying to send: {forward_error}")
-                            try:
-                                # Method 2: Send photo with caption
-                                sent = bot.send_photo(
-                                    channel_id, 
-                                    message.photo[-1].file_id, 
-                                    caption=caption
-                                )
-                                logger.info(f"Photo auto-sent successfully to {channel_id}")
-                            except Exception as send_error:
-                                logger.error(f"Photo auto-send failed to {channel_id}: {send_error}")
-                                raise send_error
+                        except Exception as e:
+                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_photo: {e}")
+                            sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="HTML")
                     elif message.content_type == "video":
-                        # Handle video with caption (text, links, formatting)
                         caption = message.caption or ""
-                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
-                        
+                        logger.info(f"🔄 Sending video to {channel_id}")
                         try:
-                            sent = bot.send_video(
-                                channel_id, 
-                                message.video.file_id, 
-                                caption=caption,
-                                parse_mode=parse_mode
-                            )
-                        except Exception as caption_error:
-                            logger.warning(f"Markdown parsing failed for video caption, sending as plain text: {caption_error}")
-                            sent = bot.send_video(
-                                channel_id, 
-                                message.video.file_id, 
-                                caption=caption
-                            )
-                            
+                            sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                        except Exception as e:
+                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_video: {e}")
+                            sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="HTML")
                     elif message.content_type == "document":
-                        # Handle document with caption (text, links, formatting)
                         caption = message.caption or ""
-                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
-                        
+                        logger.info(f"🔄 Sending document to {channel_id}")
                         try:
-                            sent = bot.send_document(
-                                channel_id, 
-                                message.document.file_id, 
-                                caption=caption,
-                                parse_mode=parse_mode
-                            )
-                        except Exception as caption_error:
-                            logger.warning(f"Markdown parsing failed for document caption, sending as plain text: {caption_error}")
-                            sent = bot.send_document(
-                                channel_id, 
-                                message.document.file_id, 
-                                caption=caption
-                            )
-                            
-                    elif message.content_type == "audio":
-                        # Handle audio with caption (text, links, formatting)
-                        caption = message.caption or ""
-                        parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
-                        
-                        try:
-                            sent = bot.send_audio(
-                                channel_id, 
-                                message.audio.file_id, 
-                                caption=caption,
-                                parse_mode=parse_mode
-                            )
-                        except Exception as caption_error:
-                            logger.warning(f"Markdown parsing failed for audio caption, sending as plain text: {caption_error}")
-                            sent = bot.send_audio(
-                                channel_id, 
-                                message.audio.file_id, 
-                                caption=caption
-                            )
+                            sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                        except Exception as e:
+                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_document: {e}")
+                            sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="HTML")
                     else:
+                        logger.info(f"🔄 Forwarding message to {channel_id}")
                         sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
 
-                    success_count += 1
-                    
-                    # Save message ID for potential deletion
                     if sent:
-                        broadcast_bot.save_broadcast_message(chat_id, channel_id, sent.message_id, f"repost_{chat_id}_{int(time.time())}")
-                    
-                    # Auto delete if configured
-                    if delete_time and sent:
-                        threading.Thread(
-                            target=auto_delete, args=(channel_id, sent.message_id, delete_time)
-                        ).start()
+                        success_count += 1
+                        logger.info(f"🔄 ✅ Successfully reposted to {channel_id}")
+                        broadcast_bot.save_broadcast_message(
+                            chat_id, channel_id, sent.message_id, 
+                            f"auto_repost_{chat_id}_{int(time.time())}", "auto_repost"
+                        )
+                        
+                        # Schedule auto delete if enabled
+                        if delete_time:
+                            logger.info(f"🔄 Scheduling auto delete for {channel_id} in {delete_time} minutes")
+                            threading.Thread(
+                                target=advanced_auto_delete, 
+                                args=(channel_id, sent.message_id, delete_time)
+                            ).start()
+                    else:
+                        failed_count += 1
+                        logger.error(f"🔄 ❌ Failed to repost to {channel_id} - sent is None")
                         
                 except Exception as e:
                     failed_count += 1
-                    logger.error(f"❌ Repost failed for {ch.get('channel_id')} -> {e}")
+                    logger.error(f"🔄 ❌ Repost failed for {ch.get('channel_id')}: {e}")
+                    logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
             
-            logger.info(f"Repost cycle completed - Success: {success_count}, Failed: {failed_count}")
+            repost_count += 1
+            broadcast_bot.update_analytics("auto_reposts")
+            
+            logger.info(f"🔄 Repost cycle {repost_count} completed - Success: {success_count}, Failed: {failed_count}")
+            
+            # Notify user every 10 reposts
+            if repost_count % 10 == 0:
+                try:
+                    bot.send_message(
+                        chat_id,
+                        f"🔄 **Auto Repost Update**\n\n"
+                        f"**Cycle:** {repost_count}\n"
+                        f"**Last Success:** {success_count}\n"
+                        f"**Last Failed:** {failed_count}\n"
+                        f"**Interval:** {repost_time} minutes",
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logger.error(f"🔄 Failed to send repost update: {e}")
             
         except Exception as e:
-            logger.error(f"Error in auto_repost: {e}")
-            time.sleep(60)  # Wait before retrying
+            logger.error(f"🔄 ❌ Error in auto_repost: {e}")
+            logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
+            time.sleep(60)
 
-def auto_delete(chat_id: int, msg_id: int, delete_time: int):
-    """Auto delete function with improved error handling"""
+def finish_advanced_broadcast(chat_id: int):
+    """Advanced broadcast function with enhanced features"""
     try:
-        logger.info(f"⏰ Auto delete scheduled for message {msg_id} from {chat_id} in {delete_time} minutes")
-        time.sleep(delete_time * 60)
-        
-        # Try to delete the message
-        result = bot.delete_message(chat_id, msg_id)
-        if result:
-            logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
-        else:
-            logger.warning(f"⚠️ Failed to delete message {msg_id} from {chat_id} - message may not exist")
-            
-    except Exception as e:
-        logger.error(f"❌ Auto delete failed for {chat_id} -> {e}")
-        # Try alternative deletion method
-        try:
-            bot.delete_message(chat_id, msg_id)
-            logger.info(f"✅ Auto deleted message {msg_id} from {chat_id} (retry successful)")
-        except Exception as retry_error:
-            logger.error(f"❌ Auto delete retry failed for {chat_id} -> {retry_error}")
+        state = bot_state.broadcast_state.get(chat_id)
+        if not state:
+            return
 
-@bot.message_handler(commands=["start", "history", "status", "myinfo", "test", "testdelete"])
+        message = state["message"]
+        repost_time = state.get("repost_time")
+        delete_time = state.get("delete_time")
+        broadcast_type = state.get("broadcast_type", "immediate")
+
+        broadcast_id = f"broadcast_{chat_id}_{int(time.time())}"
+        channels = broadcast_bot.get_all_channels(chat_id)
+        
+        if not channels:
+            bot.send_message(chat_id, "❌ No channels found! Please add channels first.")
+            return
+            
+        sent_count = 0
+        failed_count = 0
+        failed_channels = []
+
+        # Send initial status
+        status_msg = bot.send_message(
+            chat_id,
+            f"📡 **Broadcasting to {len(channels)} channels...**\n\n⏳ Please wait...",
+            parse_mode="Markdown"
+        )
+
+        for i, ch in enumerate(channels):
+            try:
+                sent = None
+                channel_id = ch["channel_id"]
+                
+                logger.info(f"Broadcasting to channel {channel_id} ({i+1}/{len(channels)})")
+                
+                # Add delay between broadcasts
+                if i > 0:
+                    delay = ch.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
+                    time.sleep(delay)
+                
+                # Send based on content type
+                if message.content_type == "text":
+                    logger.info(f"Sending text message to {channel_id}")
+                    sent = bot.send_message(channel_id, message.text, parse_mode="HTML")
+                elif message.content_type == "photo":
+                    caption = message.caption or ""
+                    logger.info(f"Sending photo to {channel_id}")
+                    try:
+                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                    except Exception as e:
+                        logger.warning(f"Forward failed for {channel_id}, trying send_photo: {e}")
+                        sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="HTML")
+                elif message.content_type == "video":
+                    caption = message.caption or ""
+                    logger.info(f"Sending video to {channel_id}")
+                    try:
+                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                    except Exception as e:
+                        logger.warning(f"Forward failed for {channel_id}, trying send_video: {e}")
+                        sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="HTML")
+                elif message.content_type == "document":
+                    caption = message.caption or ""
+                    logger.info(f"Sending document to {channel_id}")
+                    try:
+                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+                    except Exception as e:
+                        logger.warning(f"Forward failed for {channel_id}, trying send_document: {e}")
+                        sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="HTML")
+                else:
+                    logger.info(f"Forwarding message to {channel_id}")
+                    sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+
+                if sent:
+                    sent_count += 1
+                    logger.info(f"✅ Successfully sent to {channel_id}")
+                    broadcast_bot.save_broadcast_message(chat_id, channel_id, sent.message_id, broadcast_id)
+
+                    # Schedule auto delete
+                    if delete_time:
+                        logger.info(f"Scheduling auto delete for {channel_id} in {delete_time} minutes")
+                        threading.Thread(
+                            target=advanced_auto_delete, 
+                            args=(channel_id, sent.message_id, delete_time)
+                        ).start()
+                else:
+                    failed_count += 1
+                    failed_channels.append(str(channel_id))
+                    logger.error(f"❌ Failed to send to {channel_id} - sent is None")
+
+                # Update progress every 5 channels
+                if (i + 1) % 5 == 0:
+                    try:
+                        bot.edit_message_text(
+                            f"📡 **Broadcasting Progress**\n\n"
+                            f"✅ Sent: {sent_count}\n"
+                            f"❌ Failed: {failed_count}\n"
+                            f"📊 Progress: {i + 1}/{len(channels)}",
+                            chat_id, status_msg.message_id,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to update progress message: {e}")
+
+            except Exception as e:
+                failed_count += 1
+                failed_channels.append(str(channel_id))
+                logger.error(f"❌ Broadcast failed for {channel_id}: {e}")
+                logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
+
+        # Update analytics
+        broadcast_bot.update_analytics("total_broadcasts")
+        broadcast_bot.update_analytics("total_messages_sent", sent_count)
+        if failed_count > 0:
+            broadcast_bot.update_analytics("failed_broadcasts", failed_count)
+
+        # Update user stats
+        broadcast_bot.users_col.update_one(
+            {"user_id": chat_id},
+            {
+                "$inc": {"total_broadcasts": 1},
+                "$set": {"last_active": datetime.now()}
+            }
+        )
+
+        # Final result message
+        result_text = f"""
+✅ **Broadcast Completed!**
+
+📊 **Results:**
+• ✅ Sent: `{sent_count}`
+• ❌ Failed: `{failed_count}`
+• 📢 Total Channels: `{len(channels)}`
+• 🕐 Broadcast Time: `{datetime.now().strftime('%H:%M:%S')}`
+
+⚙️ **Settings:**
+• 🔄 Auto Repost: {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
+• 🗑 Auto Delete: {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
+• 📋 Broadcast ID: `{broadcast_id}`
+        """
+        
+        if failed_channels:
+            failed_list = ', '.join(failed_channels[:5])
+            if len(failed_channels) > 5:
+                failed_list += f" and {len(failed_channels) - 5} more"
+            result_text += f"\n❌ **Failed Channels:**\n`{failed_list}`"
+
+        try:
+            bot.edit_message_text(result_text, chat_id, status_msg.message_id, parse_mode="Markdown")
+        except:
+            bot.send_message(chat_id, result_text, parse_mode="Markdown")
+
+        # Start auto repost if enabled
+        if repost_time:
+            bot.send_message(
+                chat_id,
+                f"🔄 **Auto Repost Started!**\n\n"
+                f"⏱ **Interval:** `{repost_time} minutes`\n"
+                f"🗑 **Auto Delete:** {'✅' if delete_time else '❌'}\n"
+                f"🔢 **Channels:** `{sent_count}`\n\n"
+                f"Use **⏹ Stop Repost** button to cancel.",
+                parse_mode="Markdown"
+            )
+            
+            stop_flag = {"stop": False}
+            bot_state.active_reposts[chat_id] = stop_flag
+            threading.Thread(
+                target=advanced_auto_repost, 
+                args=(chat_id, message, repost_time, delete_time, stop_flag)
+            ).start()
+
+        # Clear broadcast state
+        bot_state.broadcast_state.pop(chat_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ Error in finish_broadcast: {e}")
+        bot.send_message(chat_id, "❌ An error occurred during broadcast")
+
+def stop_repost(chat_id: int):
+    """Stop active repost with confirmation"""
+    try:
+        if chat_id in bot_state.active_reposts:
+            bot_state.active_reposts[chat_id]["stop"] = True
+            del bot_state.active_reposts[chat_id]
+            
+            bot.send_message(
+                chat_id, 
+                "⏹ **Auto Repost Stopped!**\n\n✅ All repost cycles have been terminated.",
+                parse_mode="Markdown"
+            )
+        else:
+            bot.send_message(chat_id, "⚠️ No active auto repost found.")
+    except Exception as e:
+        logger.error(f"Error stopping repost: {e}")
+        bot.send_message(chat_id, "❌ Error stopping repost")
+
+@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id"])
 def start_cmd(message):
-    """Enhanced start command with better UI"""
-    # Add user to database if not exists
+    """Enhanced start command with analytics"""
+    user_id = message.from_user.id
+    
+    # Add user to database
     broadcast_bot.add_user(
         message.from_user.id,
         message.from_user.username,
@@ -673,181 +827,252 @@ def start_cmd(message):
         message.from_user.last_name
     )
     
-    # Check if user is authorized (active users, premium users, or admins)
-    if not (broadcast_bot.is_authorized(message.chat.id) or 
-            broadcast_bot.is_premium(message.chat.id) or 
-            broadcast_bot.is_admin(message.chat.id)):
-        bot.send_message(
-            message.chat.id, 
-            "🚫 **Access Denied!**\n\nYou are not authorized to use this bot.\n\nContact admin to get access.",
-            parse_mode="Markdown"
-        )
-        return
-    
-    if message.text == "/test":
-        # Test function for debugging
-        bot.send_message(
-            message.chat.id,
-            "🧪 **Test Mode Active**\n\nNow forward any message to test broadcast functionality.\n\nBot will show detailed information about the forwarded message.",
-            parse_mode="Markdown"
-        )
-        bot_state.broadcast_state[message.chat.id] = {"step": "waiting_msg"}
-        return
-        
-    if message.text == "/testdelete":
-        # Test auto delete function
-        test_msg = bot.send_message(
-            message.chat.id,
-            "🧪 **Auto Delete Test**\n\nThis message will be deleted in 10 seconds.\n\nTesting auto delete functionality...",
-            parse_mode="Markdown"
-        )
-        
-        # Start auto delete thread
-        threading.Thread(
-            target=auto_delete, args=(message.chat.id, test_msg.message_id, 0.1)  # 6 seconds
-        ).start()
-        
-        bot.send_message(
-            message.chat.id,
-            "⏰ Auto delete test started! Message will be deleted in 6 seconds.",
-            parse_mode="Markdown"
-        )
-        return
-        
-    if message.text == "/history":
-        # Show broadcast history
-        messages = broadcast_bot.get_broadcast_messages(message.chat.id)
-        if not messages:
-            bot.send_message(message.chat.id, "📋 No broadcast history found.")
-            return
-        
-        # Group messages by broadcast ID
-        broadcast_groups = {}
-        for msg in messages:
-            broadcast_id = msg.get("broadcast_id", "unknown")
-            if broadcast_id not in broadcast_groups:
-                broadcast_groups[broadcast_id] = []
-            broadcast_groups[broadcast_id].append(msg)
-        
-        history_text = f"📋 **Broadcast History**\n\nTotal Broadcasts: `{len(broadcast_groups)}`\n\n"
-        
-        for i, (broadcast_id, msgs) in enumerate(broadcast_groups.items(), 1):
-            history_text += f"**{i}. Broadcast ID:** `{broadcast_id}`\n"
-            history_text += f"**Messages:** `{len(msgs)}`\n"
-            history_text += f"**Date:** `{msgs[0]['timestamp'].strftime('%Y-%m-%d %H:%M')}`\n\n"
+    # Check if user is premium or admin
+    if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+        premium_text = f"""
+🔒 **Premium Required!** ⚡
+
+🚫 **Access Denied** - This bot is only for Premium users.
+
+💎 **Premium Features:**
+• 📢 **Unlimited Broadcasts**
+• ⚡ **Auto Repost & Delete**
+• 📋 **Bulk Channel Management**
+• 📊 **Advanced Analytics**
+• 🎯 **Priority Support**
+• ⏱ **Custom Auto Delete Times**
+• 🔢 **100+ Channels Support**
+• 🧹 **Auto Cleanup System**
+• 🛑 **Instant Stop All**
+
+💰 **Premium Plans:**
+• **1 Month:** ₹299
+• **3 Months:** ₹799
+• **6 Months:** ₹1499
+• **1 Year:** ₹2499
+
+👑 **Owner Only Activation:**
+• Only the bot owner can activate premium
+• Contact owner directly for activation
+• No self-activation allowed
+
+📞 **Contact Owner:** @{OWNER_ID}
+
+🔑 **Your User ID:** `{user_id}`
+
+⚠️ **Important:** Send your ID to owner for premium activation!
+        """
         
         markup = types.InlineKeyboardMarkup(row_width=2)
         markup.add(
-            types.InlineKeyboardButton("🗑 Delete All History", callback_data="delete_history"),
-            types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
+            types.InlineKeyboardButton("💎 Get Premium", callback_data="get_premium"),
+            types.InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin"),
         )
         
-        bot.send_message(message.chat.id, history_text, reply_markup=markup, parse_mode="Markdown")
+        try:
+            bot.send_photo(
+                message.chat.id,
+                "https://i.ibb.co/GQrGd0MV/a101f4b2bfa4.jpg",
+                caption=premium_text,
+                reply_markup=markup,
+                parse_mode="Markdown",
+            )
+        except Exception as e:
+            logger.error(f"Error sending premium message: {e}")
+            bot.send_message(message.chat.id, premium_text, reply_markup=markup, parse_mode="Markdown")
+        
         return
     
-    elif message.text in ["/status", "/myinfo"]:
-        # Show user's own status
-        user_info = broadcast_bot.get_user_info(message.chat.id)
-        if not user_info:
-            bot.send_message(message.chat.id, "❌ User information not found.")
-            return
-        
-        # Determine user type
-        if broadcast_bot.is_owner(message.chat.id):
-            user_type = "👑 Owner"
-        elif broadcast_bot.is_admin(message.chat.id):
-            user_type = "🛡️ Admin"
-        elif user_info["is_premium"]:
-            user_type = "⭐ Premium User"
-        elif user_info["is_active"]:
-            user_type = "✅ Active User"
-        else:
-            user_type = "❌ Inactive User"
-        
-        # Premium expiry info
-        premium_info = ""
-        if user_info["is_premium"] and user_info["premium_expires"]:
-            if user_info["premium_expires"] > datetime.now():
-                days_left = (user_info["premium_expires"] - datetime.now()).days
-                premium_info = f"\n⭐ **Premium Status:** Active\n📅 **Expires:** `{user_info['premium_expires'].strftime('%Y-%m-%d %H:%M')}`\n⏰ **Days Left:** `{days_left}`"
-            else:
-                premium_info = "\n⭐ **Premium Status:** Expired"
-        
-        status_text = f"""
-👤 **User Information**
+    if message.text.startswith("/stats"):
+        # Show user statistics
+        analytics = broadcast_bot.get_user_analytics(message.chat.id)
+        stats_text = f"""
+📊 **Your Statistics**
 
-🆔 **User ID:** `{user_info['user_id']}`
-👤 **Name:** {user_info['first_name']} {user_info.get('last_name', '')}
-🔗 **Username:** @{user_info.get('username', 'N/A')}
-👥 **Type:** {user_type}
-📅 **Joined:** `{user_info['added_at'].strftime('%Y-%m-%d %H:%M')}`
-🕐 **Last Activity:** `{user_info['last_activity'].strftime('%Y-%m-%d %H:%M')}`{premium_info}
+**👤 Profile:**
+• User ID: `{message.chat.id}`
+• Member Since: `{analytics.get('member_since', 'Unknown')}`
+• Last Active: `{analytics.get('last_active', 'Now')}`
+
+**📈 Usage Stats:**
+• Total Channels: `{analytics.get('total_channels', 0)}`
+• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
+• Recent Broadcasts: `{analytics.get('recent_broadcasts', 0)} (7 days)`
+
+**💎 Subscription:**
+• Type: `{analytics.get('subscription_type', 'Free').title()}`
+• Status: {'🟢 Active' if broadcast_bot.is_premium(message.chat.id) else '🔶 Free'}
         """
-        
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        markup.add(
-            types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-        )
-        
-        bot.send_message(message.chat.id, status_text, reply_markup=markup, parse_mode="Markdown")
+        bot.send_message(message.chat.id, stats_text, parse_mode="Markdown")
         return
     
-    # Regular start command
+    if message.text.startswith("/analytics") and broadcast_bot.is_admin(message.chat.id):
+        # Show admin analytics
+        today = datetime.now().strftime('%Y-%m-%d')
+        analytics = broadcast_bot.analytics_col.find_one({"date": today})
+        
+        if analytics:
+            admin_stats = f"""
+🔧 **Admin Analytics - {today}**
+
+**📊 Today's Stats:**
+• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
+• Messages Sent: `{analytics.get('total_messages_sent', 0)}`
+• Active Users: `{broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})}`
+• New Channels: `{analytics.get('new_channels_added', 0)}`
+• Auto Reposts: `{analytics.get('auto_reposts', 0)}`
+• Auto Deletes: `{analytics.get('auto_deletes', 0)}`
+• Failed Broadcasts: `{analytics.get('failed_broadcasts', 0)}`
+
+**📈 Overall Stats:**
+• Total Users: `{broadcast_bot.users_col.count_documents({})}`
+• Total Channels: `{broadcast_bot.channels_col.count_documents({})}`
+• Premium Users: `{broadcast_bot.users_col.count_documents({'is_premium': True})}`
+            """
+            bot.send_message(message.chat.id, admin_stats, parse_mode="Markdown")
+        return
+    
+    if message.text.startswith("/premium"):
+        premium_text = f"""
+💎 **Premium Features**
+
+**🆓 Free Plan:**
+• {MAX_CHANNELS_PER_USER} channels maximum
+• Basic broadcast features
+• Standard support
+
+**💎 Premium Plan:**
+• {MAX_CHANNELS_PER_USER * 2} channels maximum
+• Advanced analytics
+• Priority support
+• Scheduled broadcasts
+• Custom auto-repost intervals
+• Bulk channel management
+
+**Current Status:** {'💎 Premium' if broadcast_bot.is_premium(message.chat.id) else '🆓 Free'}
+
+Contact admin to upgrade to Premium!
+        """
+        bot.send_message(message.chat.id, premium_text, parse_mode="Markdown")
+        return
+
+    if message.text.startswith("/id"):
+        chat_id = message.chat.id
+        chat_type = message.chat.type
+        
+        if chat_type == "private":
+            id_text = f"""
+🆔 **Your Information**
+
+**👤 User Details:**
+• **User ID:** `{chat_id}`
+• **Username:** @{message.from_user.username or "None"}
+• **First Name:** {message.from_user.first_name or "None"}
+• **Last Name:** {message.from_user.last_name or "None"}
+• **Chat Type:** Private Chat
+
+**💡 Usage:**
+• Share this ID with owner for premium activation
+• Use this ID for bot configuration
+            """
+        else:
+            chat_title = message.chat.title or "Unknown"
+            id_text = f"""
+🆔 **Channel/Group Information**
+
+**📢 Channel Details:**
+• **Channel ID:** `{chat_id}`
+• **Channel Name:** {chat_title}
+• **Chat Type:** {chat_type.title()}
+• **Username:** @{message.chat.username or "None"}
+
+**💡 Usage:**
+• Use this ID to add channel to bot
+• Copy this ID for bulk channel addition
+• Share with admin for channel management
+            """
+        
+        bot.send_message(message.chat.id, id_text, parse_mode="Markdown")
+        return
+
+    if message.text.startswith("/cleanup") or message.text.startswith("/clear"):
+        if not (broadcast_bot.is_premium(message.chat.id) or broadcast_bot.is_admin(message.chat.id)):
+            bot.send_message(message.chat.id, "🔒 **Premium Required!**\n\nThis feature is only for premium users.")
+            return
+            
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("🗑 Delete All Messages", callback_data="cleanup_all_messages"),
+            types.InlineKeyboardButton("⏹ Stop All Reposts", callback_data="cleanup_stop_reposts"),
+            types.InlineKeyboardButton("🗑 Delete & Stop All", callback_data="cleanup_everything"),
+            types.InlineKeyboardButton("❌ Cancel", callback_data="cleanup_cancel"),
+        )
+        
+        cleanup_text = f"""
+🧹 **Auto Cleanup System**
+
+**🔧 Available Actions:**
+• 🗑 **Delete All Messages** - Remove all broadcast messages from channels
+• ⏹ **Stop All Reposts** - Stop all active auto reposts
+• 🗑 **Delete & Stop All** - Complete cleanup (messages + reposts)
+
+**⚠️ Warning:** These actions cannot be undone!
+
+Choose an option:
+        """
+        bot.send_message(message.chat.id, cleanup_text, reply_markup=markup, parse_mode="Markdown")
+        return
+
+    # Main menu
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📢 Broadcast", callback_data="broadcast"),
         types.InlineKeyboardButton("➕ Add Channel", callback_data="add_channel"),
+        types.InlineKeyboardButton("📋 My Channels", callback_data="my_channels"),
+        types.InlineKeyboardButton("🔍 Find Channels", callback_data="find_channels"),
     )
     markup.add(
-        types.InlineKeyboardButton("🔍 Find My Channels", callback_data="find_channels"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("➖ Remove Channel", callback_data="remove_channel"),
-        types.InlineKeyboardButton("📋 Show Channels", callback_data="show_channels"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("📢 My Channels", callback_data="my_channels"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("🗑 Clear All", callback_data="clear_channels"),
-        types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
+        types.InlineKeyboardButton("📊 Analytics", callback_data="user_analytics"),
+        types.InlineKeyboardButton("📅 Schedule", callback_data="schedule_broadcast"),
+        types.InlineKeyboardButton("📜 History", callback_data="show_history"),
+        types.InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
     )
     markup.add(
         types.InlineKeyboardButton("⏹ Stop Repost", callback_data="stop_repost"),
-        types.InlineKeyboardButton("🗑 Stop & Delete Broadcast", callback_data="stop_and_delete"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("📋 Broadcast History", callback_data="show_history"),
-        types.InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+        types.InlineKeyboardButton("🗑 Stop & Delete", callback_data="stop_and_delete"),
+        types.InlineKeyboardButton("🛑 Instant Stop All", callback_data="instant_stop_all"),
+        types.InlineKeyboardButton("🧹 Auto Cleanup", callback_data="cleanup_menu"),
     )
     
-    # Add admin management buttons for admins only
     if broadcast_bot.is_admin(message.chat.id):
         markup.add(
-            types.InlineKeyboardButton("👥 User Management", callback_data="user_management"),
-            types.InlineKeyboardButton("⭐ Premium Management", callback_data="premium_management"),
+            types.InlineKeyboardButton("🔧 Admin Panel", callback_data="admin_panel"),
         )
-    
-    # Show premium status for premium users
-    elif broadcast_bot.is_premium(message.chat.id):
-        user_info = broadcast_bot.get_user_info(message.chat.id)
-        if user_info and user_info.get("premium_expires"):
-            days_left = (user_info["premium_expires"] - datetime.now()).days
-            if days_left > 0:
-                markup.add(
-                    types.InlineKeyboardButton(f"⭐ Premium Active ({days_left} days left)", callback_data="premium_status"),
-                )
-    
-    markup.add(
-        types.InlineKeyboardButton("🔄 Restart Bot", callback_data="restart_bot"),
-    )
 
+    user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
     welcome_text = f"""
-👋 **Welcome to Broadcast Bot Panel!**
+🎉 **Advanced Broadcast Bot** 🚀
 
-**👑 Owner:** ANKIT
-**📢 Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`
-**🟢 Status:** ✅ Online
+**👋 Welcome, {message.from_user.first_name}!**
+
+**📊 Your Dashboard:**
+• 📢 **Channels:** `{user_analytics.get('total_channels', 0)}`
+• 📈 **Broadcasts:** `{user_analytics.get('total_broadcasts', 0)}`
+• 💎 **Plan:** `{user_analytics.get('subscription_type', 'Free').title()}`
+• 🟢 **Status:** ✅ Online
+
+**🔥 Advanced Features:**
+• ⚡ **Auto Repost & Delete**
+• ⏰ **Scheduled Broadcasts**  
+• 📊 **Real-time Analytics**
+• 🎨 **Multi-media Support**
+• 📋 **Bulk Operations**
+• 🛑 **Instant Stop All**
+
+**💡 Pro Tips:**
+• Use `/id` to get channel IDs quickly!
+• Use "🛑 Instant Stop All" for emergency stops
+• Use "🧹 Auto Cleanup" for complete cleanup
 
 Choose an option below:
     """
@@ -862,958 +1087,35 @@ Choose an option below:
         )
     except Exception as e:
         logger.error(f"Error sending start message: {e}")
-        bot.send_message(message.chat.id, "Error loading bot interface. Please try again.")
+        bot.send_message(message.chat.id, welcome_text, reply_markup=markup, parse_mode="Markdown")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
-    """Enhanced callback handler with better error handling"""
-    # Check if user is authorized (active users, premium users, or admins)
+    """Advanced callback handler"""
     if not (broadcast_bot.is_authorized(call.message.chat.id) or 
             broadcast_bot.is_premium(call.message.chat.id) or 
             broadcast_bot.is_admin(call.message.chat.id)):
-        bot.answer_callback_query(call.id, "🚫 Access Denied! Contact admin for access.")
+        bot.answer_callback_query(call.id, "🚫 Access Denied!")
         return
 
     try:
-        state = bot_state.broadcast_state.get(call.message.chat.id, {})
+        user_id = call.message.chat.id
+        state = bot_state.broadcast_state.get(user_id, {})
 
         if call.data == "broadcast":
-            bot_state.broadcast_state[call.message.chat.id] = {"step": "waiting_msg"}
-            bot.send_message(call.message.chat.id, "📢 Send the message you want to broadcast:")
+            bot_state.broadcast_state[user_id] = {"step": "waiting_msg"}
+            bot.send_message(user_id, "📢 Send your broadcast message:")
 
-        elif call.data == "add_channel":
-            bot.send_message(
-                call.message.chat.id,
-                "➕ Send me channel ID (starts with -100) or forward any message from that channel.\n\n**Format:** `-1001234567890`",
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "find_channels":
-            # Show instructions for finding channels
-            instructions_text = """
-🔍 **Find My Channels**
-
-To find your channels, you have several options:
-
-**Option 1: Forward Message**
-• Go to any channel where you're admin
-• Forward any message from that channel to this bot
-• The bot will automatically detect the channel
-
-**Option 2: Manual Channel ID**
-• Get channel ID from @userinfobot or similar
-• Send the channel ID (format: -1001234567890)
-
-**Option 3: Add Bot to Channel**
-• Add this bot to your channel as admin
-• Send any message in the channel
-• The bot will detect it automatically
-
-**Current Saved Channels:** `{saved_count}`
-
-Would you like to:
-            """.format(saved_count=broadcast_bot.get_channel_count())
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📤 Forward Message", callback_data="forward_message_help"),
-                types.InlineKeyboardButton("🆔 Get Channel ID", callback_data="get_channel_id_help"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("➕ Add Bot to Channel", callback_data="add_bot_help"),
-                types.InlineKeyboardButton("📋 Show Saved", callback_data="show_channels"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            bot.send_message(
-                call.message.chat.id,
-                instructions_text,
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "remove_channel":
-            channels = broadcast_bot.get_all_channels(call.message.chat.id)
-            if channels:
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                for ch in channels[:10]:  # Limit to 10 buttons
-                    markup.add(types.InlineKeyboardButton(
-                        f"❌ {ch['channel_id']}", 
-                        callback_data=f"remove_{ch['channel_id']}"
-                    ))
-                bot.send_message(call.message.chat.id, "Select channel to remove:", reply_markup=markup)
-            else:
-                bot.send_message(call.message.chat.id, "⚠️ No channels to remove.")
-
-        elif call.data.startswith("remove_"):
-            channel_id = int(call.data.split("_")[1])
-            if broadcast_bot.remove_channel(channel_id, call.message.chat.id):
-                bot.answer_callback_query(call.id, f"✅ Removed channel {channel_id}")
-                bot.edit_message_text(f"✅ Channel {channel_id} removed successfully.", 
-                                    call.message.chat.id, call.message.message_id)
-            else:
-                bot.answer_callback_query(call.id, "❌ Failed to remove channel")
-
-        elif call.data == "show_channels":
-            channels = broadcast_bot.get_all_channels(call.message.chat.id)
-            if channels:
-                channel_list = "\n".join([f"• `{ch['channel_id']}`" for ch in channels])
-                bot.send_message(
-                    call.message.chat.id, 
-                    f"📋 **Your Saved Channels ({len(channels)}):**\n\n{channel_list}",
-                    parse_mode="Markdown"
-                )
-            else:
-                bot.send_message(call.message.chat.id, "⚠️ No channels saved.")
-
-        elif call.data == "my_channels":
-            channels = broadcast_bot.get_all_channels(call.message.chat.id)
-            if channels:
-                # Get detailed channel information
-                detailed_channels = []
-                for ch in channels:
-                    try:
-                        chat_info = bot.get_chat(ch['channel_id'])
-                        channel_name = chat_info.title
-                        channel_username = getattr(chat_info, 'username', None)
-                        member_count = getattr(chat_info, 'member_count', 'N/A')
-                        
-                        channel_info = f"📢 **{channel_name}**\n"
-                        channel_info += f"🆔 ID: `{ch['channel_id']}`\n"
-                        if channel_username:
-                            channel_info += f"🔗 Username: @{channel_username}\n"
-                        channel_info += f"👥 Members: {member_count}\n"
-                        detailed_channels.append(channel_info)
-                    except Exception as e:
-                        # If can't get chat info, show basic info
-                        detailed_channels.append(f"📢 **Channel**\n🆔 ID: `{ch['channel_id']}`\n❌ Info unavailable\n")
-                
-                channels_text = f"📢 **Your Channels ({len(channels)})**\n\n"
-                channels_text += "\n".join(detailed_channels)
-                
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("🔄 Refresh", callback_data="my_channels"),
-                    types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-                )
-                
-                bot.send_message(
-                    call.message.chat.id, 
-                    channels_text,
-                    reply_markup=markup,
-                    parse_mode="Markdown"
-                )
-            else:
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                markup.add(
-                    types.InlineKeyboardButton("➕ Add Channel", callback_data="add_channel"),
-                    types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-                )
-                bot.send_message(
-                    call.message.chat.id, 
-                    "📢 **No Channels Found**\n\nYou haven't added any channels yet.\n\nClick 'Add Channel' to get started!",
-                    reply_markup=markup,
-                    parse_mode="Markdown"
-                )
-
-        elif call.data == "clear_channels":
-            try:
-                channels_col.delete_many({"user_id": call.message.chat.id})
-                bot.send_message(call.message.chat.id, "🗑 All your channels cleared successfully.")
-            except Exception as e:
-                logger.error(f"Error clearing channels: {e}")
-                bot.send_message(call.message.chat.id, "❌ Error clearing channels.")
-
-        elif call.data == "stats":
-            total_channels = broadcast_bot.get_channel_count(call.message.chat.id)
-            active_reposts_count = len(bot_state.active_reposts)
-            
-            stats_text = f"""
-📊 **Your Bot Statistics**
-
-**Your Channels:** `{total_channels}`
-**Active Reposts:** `{active_reposts_count}`
-**Bot Status:** ✅ Online
-**Last Updated:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
-            """
-            bot.send_message(call.message.chat.id, stats_text, parse_mode="Markdown")
-
-        elif call.data == "stop_repost":
-            stop_repost(call.message.chat.id)
-
-        elif call.data == "stop_and_delete":
-            # Show confirmation dialog
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("✅ Yes, Delete All", callback_data="confirm_delete_all"),
-                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_delete"),
-            )
-            bot.send_message(
-                call.message.chat.id,
-                "⚠️ **Warning!**\n\nThis will:\n• Stop all active reposts\n• Delete ALL broadcast messages from channels\n• Cannot be undone!\n\nAre you sure?",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "confirm_delete_all":
-            # Stop reposts first
-            if call.message.chat.id in bot_state.active_reposts:
-                bot_state.active_reposts[call.message.chat.id]["stop"] = True
-                del bot_state.active_reposts[call.message.chat.id]
-            
-            # Delete messages from channels
-            deleted_count, failed_count = delete_broadcast_messages_from_channels(call.message.chat.id)
-            
-            result_text = f"""
-🗑 **Broadcast Cleanup Completed!**
-
-📊 **Results:**
-• Messages Deleted: `{deleted_count}`
-• Failed Deletions: `{failed_count}`
-• Reposts Stopped: ✅
-
-✅ All broadcast messages have been removed from channels.
-            """
-            bot.send_message(call.message.chat.id, result_text, parse_mode="Markdown")
-
-        elif call.data == "cancel_delete":
-            bot.send_message(call.message.chat.id, "❌ Operation cancelled.")
-
-        elif call.data == "show_history":
-            # Show broadcast history
-            messages = broadcast_bot.get_broadcast_messages(call.message.chat.id)
-            if not messages:
-                bot.send_message(call.message.chat.id, "📋 No broadcast history found.")
-                return
-            
-            # Group messages by broadcast ID
-            broadcast_groups = {}
-            for msg in messages:
-                broadcast_id = msg.get("broadcast_id", "unknown")
-                if broadcast_id not in broadcast_groups:
-                    broadcast_groups[broadcast_id] = []
-                broadcast_groups[broadcast_id].append(msg)
-            
-            history_text = f"📋 **Broadcast History**\n\nTotal Broadcasts: `{len(broadcast_groups)}`\n\n"
-            
-            for i, (broadcast_id, msgs) in enumerate(broadcast_groups.items(), 1):
-                history_text += f"**{i}. Broadcast ID:** `{broadcast_id}`\n"
-                history_text += f"**Messages:** `{len(msgs)}`\n"
-                history_text += f"**Date:** `{msgs[0]['timestamp'].strftime('%Y-%m-%d %H:%M')}`\n\n"
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("🗑 Delete All History", callback_data="delete_history"),
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            # Send new message instead of editing (since original message might have photo)
-            bot.send_message(
-                call.message.chat.id,
-                history_text, 
-                reply_markup=markup, 
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "delete_history":
-            # Delete all broadcast history
-            deleted_count, failed_count = delete_broadcast_messages_from_channels(call.message.chat.id)
-            
-            result_text = f"""
-🗑 **History Cleanup Completed!**
-
-📊 **Results:**
-• Messages Deleted: `{deleted_count}`
-• Failed Deletions: `{failed_count}`
-
-✅ All broadcast history has been cleared.
-            """
-            bot.send_message(call.message.chat.id, result_text, parse_mode="Markdown")
-
-        elif call.data == "back_to_menu":
-            # Return to main menu
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📢 Broadcast", callback_data="broadcast"),
-                types.InlineKeyboardButton("➕ Add Channel", callback_data="add_channel"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔍 Find My Channels", callback_data="find_channels"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("➖ Remove Channel", callback_data="remove_channel"),
-                types.InlineKeyboardButton("📋 Show Channels", callback_data="show_channels"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("📢 My Channels", callback_data="my_channels"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🗑 Clear All", callback_data="clear_channels"),
-                types.InlineKeyboardButton("📊 Stats", callback_data="stats"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("⏹ Stop Repost", callback_data="stop_repost"),
-                types.InlineKeyboardButton("🗑 Stop & Delete Broadcast", callback_data="stop_and_delete"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("📋 Broadcast History", callback_data="show_history"),
-                types.InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
-            )
-            
-            # Add admin management buttons for admins only
-            if broadcast_bot.is_admin(call.message.chat.id):
-                markup.add(
-                    types.InlineKeyboardButton("👥 User Management", callback_data="user_management"),
-                    types.InlineKeyboardButton("⭐ Premium Management", callback_data="premium_management"),
-                )
-            
-            # Show premium status for premium users
-            elif broadcast_bot.is_premium(call.message.chat.id):
-                user_info = broadcast_bot.get_user_info(call.message.chat.id)
-                if user_info and user_info.get("premium_expires"):
-                    days_left = (user_info["premium_expires"] - datetime.now()).days
-                    if days_left > 0:
-                        markup.add(
-                            types.InlineKeyboardButton(f"⭐ Premium Active ({days_left} days left)", callback_data="premium_status"),
-                        )
-            
-            markup.add(
-                types.InlineKeyboardButton("🔄 Restart Bot", callback_data="restart_bot"),
-            )
-
-            welcome_text = f"""
-👋 **Welcome to Broadcast Bot Panel!**
-
-**👑 Owner:** ANKIT
-**📢 Your Channels:** `{broadcast_bot.get_channel_count(call.message.chat.id)}`
-**🟢 Status:** ✅ Online
-
-Choose an option below:
-            """
-            
-            # Send new message with photo instead of editing
-            try:
-                bot.send_photo(
-                    call.message.chat.id,
-                    "https://i.ibb.co/GQrGd0MV/a101f4b2bfa4.jpg",
-                    caption=welcome_text,
-                    reply_markup=markup,
-                    parse_mode="Markdown",
-                )
-            except Exception as e:
-                logger.error(f"Error sending welcome message: {e}")
-                bot.send_message(
-                    call.message.chat.id,
-                    welcome_text,
-                    reply_markup=markup,
-                    parse_mode="Markdown"
-                )
-
-        elif call.data == "settings":
-            # Show settings menu
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📅 Schedule Broadcast", callback_data="schedule_broadcast"),
-                types.InlineKeyboardButton("📊 Advanced Stats", callback_data="advanced_stats"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔔 Notifications", callback_data="notifications"),
-                types.InlineKeyboardButton("🔄 Auto Backup", callback_data="auto_backup"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            settings_text = """
-⚙️ **Bot Settings**
-
-Choose an option to configure:
-• **Schedule Broadcast**: Set future broadcasts
-• **Advanced Stats**: Detailed analytics
-• **Notifications**: Configure alerts
-• **Auto Backup**: Automatic data backup
-            """
-            
-            # Send new message instead of editing (since original message has photo)
-            bot.send_message(
-                call.message.chat.id,
-                settings_text,
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "schedule_broadcast":
-            # Show simple schedule options
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("⏰ 1 Hour", callback_data="schedule_1h"),
-                types.InlineKeyboardButton("⏰ 2 Hours", callback_data="schedule_2h"),
-                types.InlineKeyboardButton("⏰ 3 Hours", callback_data="schedule_3h"),
-                types.InlineKeyboardButton("⏰ 6 Hours", callback_data="schedule_6h"),
-                types.InlineKeyboardButton("⏰ 12 Hours", callback_data="schedule_12h"),
-                types.InlineKeyboardButton("⏰ 24 Hours", callback_data="schedule_24h"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            bot.send_message(
-                call.message.chat.id,
-                "📅 **Schedule Broadcast**\n\nChoose when you want to schedule the broadcast:",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-        elif call.data == "advanced_stats":
-            stats = broadcast_bot.get_broadcast_stats(call.message.chat.id)
-            
-            stats_text = f"""
-📊 **Advanced Statistics**
-
-📈 **Overall Stats:**
-• Total Messages Sent: `{stats['total_messages']}`
-• Today's Messages: `{stats['today_messages']}`
-• Total Broadcasts: `{stats['total_broadcasts']}`
-• Active Channels: `{stats['channels_count']}`
-
-📅 **Performance:**
-• Average per Broadcast: `{stats['total_messages'] // max(stats['total_broadcasts'], 1)}`
-• Success Rate: `{(stats['total_messages'] / max(stats['total_messages'] + 10, 1)) * 100:.1f}%`
-
-⏰ **Last Updated:** `{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}`
-            """
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📊 Export Data", callback_data="export_data"),
-                types.InlineKeyboardButton("🔙 Back to Settings", callback_data="settings"),
-            )
-            
-            bot.send_message(call.message.chat.id, stats_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "notifications":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("✅ Enable All", callback_data="enable_notifications"),
-                types.InlineKeyboardButton("❌ Disable All", callback_data="disable_notifications"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Settings", callback_data="settings"),
-            )
-            
-            notif_text = """
-🔔 **Notification Settings**
-
-Configure what notifications you want to receive:
-• Broadcast completion alerts
-• Error notifications
-• Scheduled broadcast reminders
-• System status updates
-            """
-            
-            bot.send_message(call.message.chat.id, notif_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "auto_backup":
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📤 Create Backup", callback_data="create_backup"),
-                types.InlineKeyboardButton("📥 Restore Backup", callback_data="restore_backup"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Settings", callback_data="settings"),
-            )
-            
-            backup_text = """
-🔄 **Auto Backup Settings**
-
-Manage your bot data:
-• Create backup of channels and settings
-• Restore from previous backup
-• Automatic daily backups
-• Export data for analysis
-            """
-            
-            bot.send_message(call.message.chat.id, backup_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "export_data":
-            # Export data functionality
-            try:
-                channels = broadcast_bot.get_all_channels()
-                messages = broadcast_bot.get_broadcast_messages(call.message.chat.id)
-                
-                export_data = {
-                    "export_time": datetime.now().isoformat(),
-                    "channels": channels,
-                    "broadcast_messages": messages,
-                    "stats": broadcast_bot.get_broadcast_stats(call.message.chat.id)
-                }
-                
-                # Save to file
-                filename = f"bot_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    json.dump(export_data, f, default=str, indent=2, ensure_ascii=False)
-                
-                # Send file
-                with open(filename, 'rb') as f:
-                    bot.send_document(
-                        call.message.chat.id,
-                        f,
-                        caption="📊 **Bot Data Export**\n\nYour bot data has been exported successfully!",
-                        parse_mode="Markdown"
-                    )
-                
-                # Clean up file
-                import os
-                os.remove(filename)
-                
-            except Exception as e:
-                logger.error(f"Error exporting data: {e}")
-                bot.send_message(call.message.chat.id, "❌ Error exporting data")
-
-        elif call.data == "create_backup":
-            try:
-                channels = broadcast_bot.get_all_channels()
-                backup_data = {
-                    "backup_time": datetime.now().isoformat(),
-                    "channels": channels,
-                    "owner_id": call.message.chat.id
-                }
-                
-                filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-                with open(filename, 'w', encoding='utf-8') as f:
-                    json.dump(backup_data, f, default=str, indent=2, ensure_ascii=False)
-                
-                with open(filename, 'rb') as f:
-                    bot.send_document(
-                        call.message.chat.id,
-                        f,
-                        caption="📤 **Backup Created Successfully!**\n\nSave this file to restore your bot data later.",
-                        parse_mode="Markdown"
-                    )
-                
-                import os
-                os.remove(filename)
-                
-            except Exception as e:
-                logger.error(f"Error creating backup: {e}")
-                bot.send_message(call.message.chat.id, "❌ Error creating backup")
-
-        elif call.data == "confirm_schedule":
-            state = bot_state.broadcast_state.get(call.message.chat.id)
-            if state and state.get("step") == "schedule_confirm":
-                message = state["message"]
-                schedule_time = state["schedule_time"]
-                channels = broadcast_bot.get_all_channels()
-                broadcast_id = f"scheduled_{call.message.chat.id}_{int(time.time())}"
-                
-                if broadcast_bot.schedule_broadcast(call.message.chat.id, message, channels, schedule_time, broadcast_id):
-                    bot.send_message(
-                        call.message.chat.id,
-                        f"✅ **Broadcast Scheduled Successfully!**\n\n📅 **Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n📢 **Your Channels:** `{len(channels)}`\n🆔 **Broadcast ID:** `{broadcast_id}`\n\nYou'll be notified when the broadcast is sent.",
-                        parse_mode="Markdown"
-                    )
-                else:
-                    bot.send_message(call.message.chat.id, "❌ Error scheduling broadcast")
-                
-                bot_state.broadcast_state.pop(call.message.chat.id, None)
-
-        elif call.data == "cancel_schedule":
-            bot_state.broadcast_state.pop(call.message.chat.id, None)
-            bot.send_message(call.message.chat.id, "❌ Schedule cancelled")
-
-        # Simple schedule options
-        elif call.data.startswith("schedule_"):
-            hours = int(call.data.split("_")[1].replace("h", ""))
-            bot_state.broadcast_state[call.message.chat.id] = {"step": "schedule_msg", "hours": hours}
-            bot.send_message(
-                call.message.chat.id,
-                f"📅 **Schedule for {hours} Hour{'s' if hours > 1 else ''}**\n\nSend the message you want to schedule for broadcast in {hours} hour{'s' if hours > 1 else ''}."
-            )
-
-        elif call.data == "forward_message_help":
-            help_text = """
-📤 **How to Forward Message**
-
-1. **Go to your channel** where you're admin
-2. **Select any message** (text, photo, video, etc.)
-3. **Forward it** to this bot
-4. **Bot will automatically** detect the channel and add it
-
-**Example:**
-• Channel: @mychannel
-• Message: "Hello World"
-• Forward to: @your_bot
-• Result: Channel automatically added!
-
-**Note:** Make sure you're admin in the channel you want to add.
-            """
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Find Channels", callback_data="find_channels"),
-            )
-            bot.send_message(call.message.chat.id, help_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "get_channel_id_help":
-            help_text = """
-🆔 **How to Get Channel ID**
-
-**Method 1: Using @userinfobot**
-1. Add @userinfobot to your channel
-2. Send any message in the channel
-3. The bot will show channel ID like: `-1001234567890`
-
-**Method 2: Using @getidsbot**
-1. Add @getidsbot to your channel
-2. Send `/start` in the channel
-3. Get the channel ID
-
-**Method 3: Manual Detection**
-1. Send channel ID directly: `-1001234567890`
-2. Bot will verify and add if valid
-
-**Format:** Always starts with `-100` followed by numbers
-            """
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Find Channels", callback_data="find_channels"),
-            )
-            bot.send_message(call.message.chat.id, help_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "add_bot_help":
-            help_text = """
-➕ **How to Add Bot to Channel**
-
-**Step 1: Add Bot as Admin**
-1. Go to your channel settings
-2. Click "Administrators"
-3. Click "Add Administrator"
-4. Search for your bot: `@your_bot_username`
-5. Give these permissions:
-   ✅ Post Messages
-   ✅ Edit Messages
-   ✅ Delete Messages
-
-**Step 2: Send Test Message**
-1. Send any message in the channel
-2. Bot will automatically detect the channel
-3. Channel will be added to your list
-
-**Step 3: Verify**
-1. Check "Show Saved Channels" in bot
-2. Your channel should appear in the list
-
-**Note:** Bot needs admin rights to send messages in your channel.
-            """
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Find Channels", callback_data="find_channels"),
-            )
-            bot.send_message(call.message.chat.id, help_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "user_management":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            # Show user management menu
-            users = broadcast_bot.get_all_users()
-            active_users = broadcast_bot.get_active_users()
-            
-            stats_text = f"""
-👥 **User Management Panel**
-
-📊 **Statistics:**
-• Total Users: `{len(users)}`
-• Active Users: `{len(active_users)}`
-• Premium Users: `{len(broadcast_bot.get_premium_users())}`
-
-Choose an action:
-            """
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("➕ Activate User", callback_data="activate_user"),
-                types.InlineKeyboardButton("➖ Deactivate User", callback_data="deactivate_user"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("📋 All Users", callback_data="show_all_users"),
-                types.InlineKeyboardButton("✅ Active Users", callback_data="show_active_users"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            bot.send_message(call.message.chat.id, stats_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "premium_management":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            # Show premium management menu
-            premium_users = broadcast_bot.get_premium_users()
-            
-            stats_text = f"""
-⭐ **Premium Management Panel**
-
-📊 **Statistics:**
-• Premium Users: `{len(premium_users)}`
-• Total Users: `{len(broadcast_bot.get_all_users())}`
-
-Choose an action:
-            """
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("⭐ Give Premium", callback_data="give_premium"),
-                types.InlineKeyboardButton("❌ Revoke Premium", callback_data="revoke_premium"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("📋 Premium Users", callback_data="show_premium_users"),
-                types.InlineKeyboardButton("📊 Premium Stats", callback_data="premium_stats"),
-            )
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-            )
-            
-            bot.send_message(call.message.chat.id, stats_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "activate_user":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            bot_state.user_sessions[call.message.chat.id] = {"action": "activate_user", "step": "waiting_user_id"}
-            bot.send_message(
-                call.message.chat.id,
-                "➕ **Activate User**\n\nSend the user ID you want to activate.\n\n**Format:** `123456789`"
-            )
-
-        elif call.data == "deactivate_user":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            bot_state.user_sessions[call.message.chat.id] = {"action": "deactivate_user", "step": "waiting_user_id"}
-            bot.send_message(
-                call.message.chat.id,
-                "➖ **Deactivate User**\n\nSend the user ID you want to deactivate.\n\n**Format:** `123456789`"
-            )
-
-        elif call.data == "give_premium":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            bot_state.user_sessions[call.message.chat.id] = {"action": "give_premium", "step": "waiting_user_id"}
-            bot.send_message(
-                call.message.chat.id,
-                "⭐ **Give Premium**\n\nSend the user ID you want to give premium access.\n\n**Format:** `123456789`"
-            )
-
-        elif call.data == "revoke_premium":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            bot_state.user_sessions[call.message.chat.id] = {"action": "revoke_premium", "step": "waiting_user_id"}
-            bot.send_message(
-                call.message.chat.id,
-                "❌ **Revoke Premium**\n\nSend the user ID you want to revoke premium from.\n\n**Format:** `123456789`"
-            )
-
-        elif call.data == "show_all_users":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            users = broadcast_bot.get_all_users()
-            if not users:
-                bot.send_message(call.message.chat.id, "📋 No users found in database.")
-                return
-            
-            users_text = f"📋 **All Users ({len(users)})**\n\n"
-            for i, user in enumerate(users[:20], 1):  # Show first 20 users
-                status = "✅ Active" if user.get("is_active") else "❌ Inactive"
-                premium = "⭐ Premium" if user.get("is_premium") else "📱 Basic"
-                users_text += f"**{i}. ID:** `{user['user_id']}`\n"
-                users_text += f"**Name:** {user.get('first_name', 'N/A')}\n"
-                users_text += f"**Status:** {status} | {premium}\n\n"
-            
-            if len(users) > 20:
-                users_text += f"... and {len(users) - 20} more users"
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to User Management", callback_data="user_management"),
-            )
-            
-            bot.send_message(call.message.chat.id, users_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "show_active_users":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            users = broadcast_bot.get_active_users()
-            if not users:
-                bot.send_message(call.message.chat.id, "📋 No active users found.")
-                return
-            
-            users_text = f"✅ **Active Users ({len(users)})**\n\n"
-            for i, user in enumerate(users[:20], 1):  # Show first 20 users
-                premium = "⭐ Premium" if user.get("is_premium") else "📱 Basic"
-                users_text += f"**{i}. ID:** `{user['user_id']}`\n"
-                users_text += f"**Name:** {user.get('first_name', 'N/A')}\n"
-                users_text += f"**Type:** {premium}\n\n"
-            
-            if len(users) > 20:
-                users_text += f"... and {len(users) - 20} more users"
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to User Management", callback_data="user_management"),
-            )
-            
-            bot.send_message(call.message.chat.id, users_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "show_premium_users":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            users = broadcast_bot.get_premium_users()
-            if not users:
-                bot.send_message(call.message.chat.id, "📋 No premium users found.")
-                return
-            
-            users_text = f"⭐ **Premium Users ({len(users)})**\n\n"
-            for i, user in enumerate(users[:20], 1):  # Show first 20 users
-                expiry = user.get("premium_expires")
-                if expiry:
-                    expiry_str = expiry.strftime("%Y-%m-%d %H:%M")
-                else:
-                    expiry_str = "Unknown"
-                
-                users_text += f"**{i}. ID:** `{user['user_id']}`\n"
-                users_text += f"**Name:** {user.get('first_name', 'N/A')}\n"
-                users_text += f"**Expires:** `{expiry_str}`\n\n"
-            
-            if len(users) > 20:
-                users_text += f"... and {len(users) - 20} more users"
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Premium Management", callback_data="premium_management"),
-            )
-            
-            bot.send_message(call.message.chat.id, users_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "premium_stats":
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.send_message(call.message.chat.id, "🚫 You don't have permission to access this feature.")
-                return
-            
-            users = broadcast_bot.get_all_users()
-            premium_users = broadcast_bot.get_premium_users()
-            active_users = broadcast_bot.get_active_users()
-            
-            # Calculate premium expiry stats
-            expiring_soon = 0
-            expired = 0
-            for user in premium_users:
-                if user.get("premium_expires"):
-                    if user["premium_expires"] < datetime.now():
-                        expired += 1
-                    elif user["premium_expires"] < datetime.now() + timedelta(days=7):
-                        expiring_soon += 1
-            
-            stats_text = f"""
-📊 **Premium Statistics**
-
-👥 **User Overview:**
-• Total Users: `{len(users)}`
-• Active Users: `{len(active_users)}`
-• Premium Users: `{len(premium_users)}`
-
-⭐ **Premium Status:**
-• Active Premium: `{len(premium_users) - expired}`
-• Expired Premium: `{expired}`
-• Expiring Soon (7 days): `{expiring_soon}`
-
-📈 **Conversion Rate:**
-• Basic to Premium: `{(len(premium_users) / max(len(active_users), 1)) * 100:.1f}%`
-            """
-            
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton("🔙 Back to Premium Management", callback_data="premium_management"),
-            )
-            
-            bot.send_message(call.message.chat.id, stats_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "premium_status":
-            # Show premium user status
-            user_info = broadcast_bot.get_user_info(call.message.chat.id)
-            if user_info and user_info.get("is_premium"):
-                expiry = user_info.get("premium_expires")
-                if expiry:
-                    days_left = (expiry - datetime.now()).days
-                    if days_left > 0:
-                        status_text = f"""
-⭐ **Premium Status**
-
-👤 **User:** {user_info.get('first_name', 'N/A')}
-🆔 **ID:** `{user_info['user_id']}`
-⭐ **Status:** Active Premium
-📅 **Expires:** `{expiry.strftime('%Y-%m-%d %H:%M')}`
-⏰ **Days Left:** `{days_left}`
-
-✅ You have access to all broadcast features!
-                        """
-                    else:
-                        status_text = "⭐ **Premium Status:** Expired\n\nContact admin to renew your premium access."
-                else:
-                    status_text = "⭐ **Premium Status:** Active (No expiry date)"
-                
-                markup = types.InlineKeyboardMarkup(row_width=1)
-                markup.add(
-                    types.InlineKeyboardButton("🔙 Back to Menu", callback_data="back_to_menu"),
-                )
-                
-                bot.send_message(call.message.chat.id, status_text, reply_markup=markup, parse_mode="Markdown")
-            else:
-                bot.send_message(call.message.chat.id, "❌ Premium status not found.")
-
-        elif call.data == "restart_bot":
-            # Only allow restart for admins
-            if not broadcast_bot.is_admin(call.message.chat.id):
-                bot.answer_callback_query(call.id, "🚫 Only admins can restart the bot!")
-                return
-            bot.send_message(call.message.chat.id, "🔄 Restarting bot...")
-            # In a real deployment, you'd restart the process
-            bot.send_message(call.message.chat.id, "✅ Bot restarted successfully!")
-
-        # Repost / Delete flow handling
-        # Auto Repost and Auto Delete Flow
         elif call.data == "repost_yes":
             state["step"] = "ask_repost_time"
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("⏱ 5 Min", callback_data="repost_5"),
-                types.InlineKeyboardButton("⏱ 10 Min", callback_data="repost_10"),
-                types.InlineKeyboardButton("⏱ 15 Min", callback_data="repost_15"),
-                types.InlineKeyboardButton("⏱ 30 Min", callback_data="repost_30"),
-                types.InlineKeyboardButton("⏱ 1 Hour", callback_data="repost_1h"),
-                types.InlineKeyboardButton("⏱ 2 Hours", callback_data="repost_2h"),
-                types.InlineKeyboardButton("⏱ 6 Hours", callback_data="repost_6h"),
-                types.InlineKeyboardButton("⏱ 12 Hours", callback_data="repost_12h"),
-                types.InlineKeyboardButton("⏱ 24 Hours", callback_data="repost_24h"),
-                types.InlineKeyboardButton("⏱ Custom Time", callback_data="repost_custom"),
+                types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
+                types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
+                types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
+                types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60"),
             )
-            bot.send_message(call.message.chat.id, "⏱ **Auto Repost Options**\n\nChoose repost interval:", reply_markup=markup, parse_mode="Markdown")
+            bot.send_message(user_id, "⏱ Choose repost interval:", reply_markup=markup)
             
         elif call.data == "repost_no":
             state["repost_time"] = None
@@ -1823,734 +1125,983 @@ Choose an action:
                 types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
                 types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
             )
-            bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
+            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
             
         elif call.data == "delete_yes":
             state["step"] = "ask_autodelete_time"
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("🗑 5 Min", callback_data="delete_5"),
-                types.InlineKeyboardButton("🗑 10 Min", callback_data="delete_10"),
-                types.InlineKeyboardButton("🗑 15 Min", callback_data="delete_15"),
-                types.InlineKeyboardButton("🗑 30 Min", callback_data="delete_30"),
-                types.InlineKeyboardButton("🗑 1 Hour", callback_data="delete_1h"),
-                types.InlineKeyboardButton("🗑 2 Hours", callback_data="delete_2h"),
-                types.InlineKeyboardButton("🗑 6 Hours", callback_data="delete_6h"),
-                types.InlineKeyboardButton("🗑 12 Hours", callback_data="delete_12h"),
-                types.InlineKeyboardButton("🗑 24 Hours", callback_data="delete_24h"),
+                types.InlineKeyboardButton("🗑 5m", callback_data="delete_5"),
+                types.InlineKeyboardButton("🗑 10m", callback_data="delete_10"),
+                types.InlineKeyboardButton("🗑 15m", callback_data="delete_15"),
+                types.InlineKeyboardButton("🗑 30m", callback_data="delete_30"),
+                types.InlineKeyboardButton("🗑 1h", callback_data="delete_60"),
+                types.InlineKeyboardButton("🗑 2h", callback_data="delete_120"),
+                types.InlineKeyboardButton("🗑 6h", callback_data="delete_360"),
+                types.InlineKeyboardButton("🗑 12h", callback_data="delete_720"),
+                types.InlineKeyboardButton("🗑 24h", callback_data="delete_1440"),
                 types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
             )
-            bot.send_message(call.message.chat.id, "🗑 **Auto Delete Options**\n\nChoose when to auto delete the broadcasted message:", reply_markup=markup, parse_mode="Markdown")
+            bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
             
         elif call.data == "delete_no":
             state["delete_time"] = None
-            finish_broadcast(call.message.chat.id)
+            finish_advanced_broadcast(user_id)
 
-        # Handle repost time selection
         elif call.data.startswith("repost_"):
-            if call.data == "repost_custom":
-                state["step"] = "ask_repost_time"
-                bot.send_message(call.message.chat.id, "⏱ Enter custom repost time in minutes (minimum 1):")
-            else:
-                # Extract time from callback data
-                time_str = call.data.replace("repost_", "")
-                if time_str.endswith("h"):
-                    hours = int(time_str.replace("h", ""))
-                    state["repost_time"] = hours * 60  # Convert to minutes
-                else:
-                    state["repost_time"] = int(time_str)  # Already in minutes
-                
-                # Now ask for auto delete
-                state["step"] = "ask_autodelete"
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-                )
-                bot.send_message(call.message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
+            time_value = int(call.data.replace("repost_", ""))
+            state["repost_time"] = time_value
+            state["step"] = "ask_autodelete"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
+                types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+            )
+            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
 
-        # Handle delete time selection
         elif call.data.startswith("delete_"):
             if call.data == "delete_custom":
                 state["step"] = "ask_autodelete_time"
-                bot.send_message(call.message.chat.id, "⏱ Enter custom delete time in minutes (minimum 1):")
+                bot.send_message(
+                    user_id, 
+                    "⏱ **Custom Delete Time**\n\n"
+                    "Enter delete time in minutes:\n\n"
+                    "📝 **Examples:**\n"
+                    "• `10` = 10 minutes\n"
+                    "• `60` = 1 hour\n"
+                    "• `1440` = 24 hours\n\n"
+                    "⚠️ **Minimum:** 1 minute"
+                )
             else:
-                # Extract time from callback data
-                time_str = call.data.replace("delete_", "")
-                if time_str.endswith("h"):
-                    hours = int(time_str.replace("h", ""))
-                    state["delete_time"] = hours * 60  # Convert to minutes
-                else:
-                    state["delete_time"] = int(time_str)  # Already in minutes
-                finish_broadcast(call.message.chat.id)
+                time_value = int(call.data.replace("delete_", ""))
+                state["delete_time"] = time_value
+                finish_advanced_broadcast(user_id)
 
-        bot_state.broadcast_state[call.message.chat.id] = state
+        elif call.data == "stop_repost":
+            stop_repost(user_id)
+            
+        elif call.data == "stop_and_delete":
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Yes, Delete All", callback_data="confirm_delete_all"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_delete"),
+            )
+            bot.send_message(
+                user_id,
+                "⚠️ **Warning!**\n\n"
+                "This will:\n"
+                "• Stop all active reposts\n"
+                "• Delete ALL broadcast messages from channels\n"
+                "• Cannot be undone!\n\n"
+                "Are you sure?",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            
+        elif call.data == "confirm_delete_all":
+            # Stop all reposts
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+            
+            # Delete all broadcast messages
+            deleted_count = 0
+            failed_count = 0
+            
+            try:
+                # Get all broadcast messages for this user
+                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+                
+                for msg in broadcast_messages:
+                    try:
+                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
+                        if result:
+                            deleted_count += 1
+                        else:
+                            failed_count += 1
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
+                
+                # Clear broadcast history from database
+                broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+                
+                result_text = f"""
+🗑 **Broadcast Cleanup Completed!**
+
+📊 **Results:**
+• ✅ Messages Deleted: `{deleted_count}`
+• ❌ Failed Deletions: `{failed_count}`
+• 🔄 Reposts Stopped: ✅
+• 📋 History Cleared: ✅
+
+✅ All broadcast messages have been removed from channels.
+                """
+                bot.send_message(user_id, result_text, parse_mode="Markdown")
+                
+            except Exception as e:
+                logger.error(f"Error in confirm_delete_all: {e}")
+                bot.send_message(user_id, "❌ Error during cleanup process")
+                
+        elif call.data == "cancel_delete":
+            bot.send_message(user_id, "❌ Operation cancelled.")
+
+        elif call.data == "instant_stop_all":
+            # Instant stop all reposts and delete all messages
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+            
+            # Get all broadcast messages
+            broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+            
+            # Send instant status
+            status_msg = bot.send_message(
+                user_id,
+                f"🛑 **Instant Stop All Activated!**\n\n"
+                f"⏹ Stopping all reposts...\n"
+                f"🗑 Deleting {len(broadcast_messages)} messages...\n"
+                f"⚡ Processing at maximum speed...",
+                parse_mode="Markdown"
+            )
+            
+            # Fast deletion without progress updates
+            deleted_count = 0
+            failed_count = 0
+            
+            for msg in broadcast_messages:
+                try:
+                    result = bot.delete_message(msg['channel_id'], msg['message_id'])
+                    if result:
+                        deleted_count += 1
+                    else:
+                        failed_count += 1
+                except:
+                    failed_count += 1
+            
+            # Clear broadcast history
+            broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+            
+            # Final result
+            result_text = f"""
+🛑 **Instant Stop All - COMPLETED!**
+
+⚡ **Ultra-Fast Results:**
+• ✅ **Messages Deleted:** `{deleted_count}`
+• ❌ **Failed:** `{failed_count}`
+• ⏹ **Reposts Stopped:** ✅
+• 📋 **History Cleared:** ✅
+• ⚡ **Speed:** Instant
+
+🎯 **All broadcasts stopped and deleted instantly!**
+            """
+            bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+
+        elif call.data == "add_channel":
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("➕ Single Channel", callback_data="add_single_channel"),
+                types.InlineKeyboardButton("📋 Bulk Add Channels", callback_data="add_bulk_channels"),
+            )
+            bot.send_message(
+                user_id, 
+                "➕ **Add Channels**\n\nChoose how you want to add channels:",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+
+        elif call.data == "add_single_channel":
+            bot_state.broadcast_state[user_id] = {"step": "add_single_channel"}
+            bot.send_message(user_id, "➕ Send channel ID (e.g., -1001234567890):")
+
+        elif call.data == "add_bulk_channels":
+            bot_state.broadcast_state[user_id] = {"step": "bulk_add_channels"}
+            bot.send_message(
+                user_id,
+                "📋 **Bulk Add Channels**\n\n"
+                "Send channel IDs in this format:\n\n"
+                "```\n"
+                "-1002334441744\n"
+                "-1002070181214\n"
+                "-1002203225057\n"
+                "-1002431437495\n"
+                "```\n\n"
+                "**Or:**\n\n"
+                "```\n"
+                "-1002334441744, -1002070181214, -1002203225057\n"
+                "```\n\n"
+                "⚠️ **Maximum:** 100 channels at once",
+                parse_mode="Markdown"
+            )
+
+        elif call.data == "my_channels":
+            channels = broadcast_bot.get_all_channels(user_id)
+            if channels:
+                channels_text = "📋 **Your Channels:**\n\n"
+                for i, ch in enumerate(channels, 1):
+                    try:
+                        chat_info = bot.get_chat(ch["channel_id"])
+                        channels_text += f"{i}. **{chat_info.title}**\n   `{ch['channel_id']}`\n\n"
+                    except:
+                        channels_text += f"{i}. **Unknown Channel**\n   `{ch['channel_id']}`\n\n"
+                
+                markup = types.InlineKeyboardMarkup()
+                markup.add(types.InlineKeyboardButton("🗑 Remove Channel", callback_data="remove_channel"))
+                bot.send_message(user_id, channels_text, reply_markup=markup, parse_mode="Markdown")
+            else:
+                bot.send_message(user_id, "❌ No channels found! Add channels first.")
+
+        elif call.data == "find_channels":
+            bot.send_message(user_id, "🔍 **Find Channels**\n\nForward a message from any channel to get its ID.")
+
+        elif call.data == "user_analytics":
+            analytics = broadcast_bot.get_user_analytics(user_id)
+            stats_text = f"""
+📊 **Your Analytics**
+
+**👤 Profile:**
+• User ID: `{user_id}`
+• Member Since: `{analytics.get('member_since', 'Unknown')}`
+• Last Active: `{analytics.get('last_active', 'Now')}`
+
+**📈 Usage Stats:**
+• Total Channels: `{analytics.get('total_channels', 0)}`
+• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
+• Recent Broadcasts: `{analytics.get('recent_broadcasts', 0)} (7 days)`
+
+**💎 Subscription:**
+• Type: `{analytics.get('subscription_type', 'Free').title()}`
+• Status: {'🟢 Active' if broadcast_bot.is_premium(user_id) else '🔶 Free'}
+            """
+            bot.send_message(user_id, stats_text, parse_mode="Markdown")
+
+        elif call.data == "schedule_broadcast":
+            bot.send_message(user_id, "📅 **Scheduled Broadcast**\n\nThis feature is coming soon!")
+
+        elif call.data == "show_history":
+            messages = broadcast_bot.get_broadcast_messages(user_id, 10)
+            if messages:
+                history_text = "📜 **Recent Broadcast History:**\n\n"
+                for i, msg in enumerate(messages[:5], 1):
+                    history_text += f"{i}. **{msg['message_type'].title()}**\n   Channel: `{msg['channel_id']}`\n   Time: `{msg['timestamp'].strftime('%H:%M:%S')}`\n\n"
+                bot.send_message(user_id, history_text, parse_mode="Markdown")
+            else:
+                bot.send_message(user_id, "❌ No broadcast history found!")
+
+        elif call.data == "user_settings":
+            settings_text = f"""
+⚙️ **User Settings**
+
+**🔧 Current Settings:**
+• Max Channels: `{MAX_CHANNELS_PER_USER}`
+• Broadcast Delay: `{BROADCAST_DELAY}s`
+• Auto Delete Options: Available
+• Auto Repost Options: Available
+
+**💎 Premium Features:**
+• Double Channel Limit
+• Advanced Analytics
+• Priority Support
+            """
+            bot.send_message(user_id, settings_text, parse_mode="Markdown")
+
+        elif call.data == "admin_panel" and broadcast_bot.is_admin(user_id):
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("📊 System Analytics", callback_data="admin_analytics"),
+                types.InlineKeyboardButton("👥 User Management", callback_data="admin_users"),
+                types.InlineKeyboardButton("🔧 System Settings", callback_data="admin_settings"),
+                types.InlineKeyboardButton("📋 Broadcast Logs", callback_data="admin_logs"),
+                types.InlineKeyboardButton("🔄 Restart Bot", callback_data="admin_restart"),
+                types.InlineKeyboardButton("❌ Close Panel", callback_data="admin_close"),
+            )
+            bot.send_message(
+                user_id,
+                "🔧 **Admin Panel**\n\nSelect an option:",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+
+        elif call.data == "admin_analytics" and broadcast_bot.is_admin(user_id):
+            today = datetime.now().strftime('%Y-%m-%d')
+            analytics = broadcast_bot.analytics_col.find_one({"date": today})
+            
+            if analytics:
+                admin_stats = f"""
+🔧 **System Analytics - {today}**
+
+**📊 Today's Stats:**
+• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
+• Messages Sent: `{analytics.get('total_messages_sent', 0)}`
+• Active Users: `{broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})}`
+• New Channels: `{analytics.get('new_channels_added', 0)}`
+• Auto Reposts: `{analytics.get('auto_reposts', 0)}`
+• Auto Deletes: `{analytics.get('auto_deletes', 0)}`
+• Failed Broadcasts: `{analytics.get('failed_broadcasts', 0)}`
+
+**📈 Overall Stats:**
+• Total Users: `{broadcast_bot.users_col.count_documents({})}`
+• Total Channels: `{broadcast_bot.channels_col.count_documents({})}`
+• Premium Users: `{broadcast_bot.users_col.count_documents({'is_premium': True})}`
+                """
+                bot.send_message(user_id, admin_stats, parse_mode="Markdown")
+            else:
+                bot.send_message(user_id, "❌ No analytics data found!")
+
+        elif call.data == "admin_users" and broadcast_bot.is_admin(user_id):
+            total_users = broadcast_bot.users_col.count_documents({})
+            active_users = broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})
+            premium_users = broadcast_bot.users_col.count_documents({'is_premium': True})
+            expired_premium = len(broadcast_bot.get_expired_premium_users())
+            
+            users_text = f"""
+👥 **User Management**
+
+**📊 User Statistics:**
+• Total Users: `{total_users}`
+• Active Users (24h): `{active_users}`
+• Premium Users: `{premium_users}`
+• Expired Premium: `{expired_premium}`
+• Free Users: `{total_users - premium_users}`
+
+**🔧 Owner Actions:**
+• Make users premium (Owner Only)
+• Remove premium access (Owner Only)
+• View premium statistics
+            """
+            
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            if str(user_id) == OWNER_ID:
+                markup.add(
+                    types.InlineKeyboardButton("💎 Make Premium", callback_data="admin_make_premium"),
+                    types.InlineKeyboardButton("🗑 Remove Premium", callback_data="admin_remove_premium"),
+                )
+            markup.add(
+                types.InlineKeyboardButton("📊 Premium Stats", callback_data="admin_premium_stats"),
+            )
+            bot.send_message(user_id, users_text, reply_markup=markup, parse_mode="Markdown")
+
+        elif call.data == "admin_settings" and broadcast_bot.is_admin(user_id):
+            settings_text = f"""
+🔧 **System Settings**
+
+**⚙️ Current Configuration:**
+• BOT_TOKEN: ✅ Configured
+• MONGO_URL: ✅ Connected
+• MAX_CHANNELS_PER_USER: `{MAX_CHANNELS_PER_USER}`
+• BROADCAST_DELAY: `{BROADCAST_DELAY}s`
+• AUTO_DELETE_OPTIONS: Available
+• AUTO_REPOST_OPTIONS: Available
+
+**🔧 System Status:**
+• Bot: ✅ Online
+• Database: ✅ Connected
+• Analytics: ✅ Active
+            """
+            bot.send_message(user_id, settings_text, parse_mode="Markdown")
+
+        elif call.data == "admin_logs" and broadcast_bot.is_admin(user_id):
+            bot.send_message(user_id, "📋 **Broadcast Logs**\n\nCheck bot.log file for detailed logs.")
+
+        elif call.data == "admin_restart" and broadcast_bot.is_admin(user_id):
+            bot.send_message(user_id, "🔄 **Restarting Bot...**\n\nBot will restart in 3 seconds.")
+            time.sleep(3)
+            os._exit(0)
+
+        elif call.data == "admin_close" and broadcast_bot.is_admin(user_id):
+            bot.send_message(user_id, "❌ **Admin Panel Closed**")
+
+        elif call.data == "remove_channel":
+            channels = broadcast_bot.get_all_channels(user_id)
+            if channels:
+                markup = types.InlineKeyboardMarkup(row_width=1)
+                for ch in channels[:10]:  # Limit to 10 channels
+                    try:
+                        chat_info = bot.get_chat(ch["channel_id"])
+                        markup.add(types.InlineKeyboardButton(
+                            f"🗑 {chat_info.title}", 
+                            callback_data=f"remove_{ch['channel_id']}"
+                        ))
+                    except:
+                        markup.add(types.InlineKeyboardButton(
+                            f"🗑 Unknown Channel", 
+                            callback_data=f"remove_{ch['channel_id']}"
+                        ))
+                bot.send_message(user_id, "🗑 **Select channel to remove:**", reply_markup=markup, parse_mode="Markdown")
+            else:
+                bot.send_message(user_id, "❌ No channels to remove!")
+
+        elif call.data.startswith("remove_") and broadcast_bot.is_admin(user_id):
+            channel_id = int(call.data.replace("remove_", ""))
+            if broadcast_bot.remove_channel(channel_id, user_id):
+                bot.send_message(user_id, f"✅ Channel `{channel_id}` removed successfully!", parse_mode="Markdown")
+            else:
+                bot.send_message(user_id, f"❌ Failed to remove channel `{channel_id}`", parse_mode="Markdown")
+
+        elif call.data == "get_premium":
+            premium_text = f"""
+💎 **Premium Subscription**
+
+🔑 **Your User ID:** `{user_id}`
+
+💰 **Premium Plans:**
+• **1 Month:** ₹299
+• **3 Months:** ₹799  
+• **6 Months:** ₹1499
+• **1 Year:** ₹2499
+
+💳 **Payment Methods:**
+• UPI: owner@example
+• Paytm: 9876543210
+• PhonePe: 9876543210
+
+👑 **Owner Only Activation:**
+• Only bot owner can activate premium
+• Contact owner directly: @{OWNER_ID}
+• No admin activation allowed
+
+⚠️ **After Payment:**
+1. Send payment screenshot to owner
+2. Share your User ID: `{user_id}`
+3. Owner will activate premium within 5 minutes
+
+🔒 **Security:** Premium activation is owner-controlled only!
+            """
+            bot.send_message(user_id, premium_text, parse_mode="Markdown")
+
+        elif call.data == "contact_admin":
+            contact_text = f"""
+📞 **Contact Owner**
+
+🔑 **Your User ID:** `{user_id}`
+
+👑 **Owner Contact:** @{OWNER_ID}
+
+💬 **Message Template:**
+```
+Hi Owner,
+I want to get premium access for your bot.
+My User ID: {user_id}
+Please help me with payment details and activation.
+```
+
+⏰ **Response Time:** Within 5 minutes
+
+🔒 **Note:** Only owner can activate premium access!
+            """
+            bot.send_message(user_id, contact_text, parse_mode="Markdown")
+
+        elif call.data == "admin_make_premium" and broadcast_bot.is_admin(user_id):
+            if str(user_id) != OWNER_ID:
+                bot.send_message(
+                    user_id,
+                    "🔒 **Owner Only Feature!**\n\nOnly the bot owner can activate premium users.",
+                    parse_mode="Markdown"
+                )
+                return
+                
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("1 Month", callback_data="premium_30"),
+                types.InlineKeyboardButton("3 Months", callback_data="premium_90"),
+                types.InlineKeyboardButton("6 Months", callback_data="premium_180"),
+                types.InlineKeyboardButton("1 Year", callback_data="premium_365"),
+            )
+            bot.send_message(
+                user_id,
+                "💎 **Owner Premium Activation**\n\nSend user ID to make premium:",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+
+        elif call.data.startswith("premium_") and broadcast_bot.is_admin(user_id):
+            if str(user_id) != OWNER_ID:
+                bot.send_message(
+                    user_id,
+                    "🔒 **Owner Only Feature!**\n\nOnly the bot owner can activate premium users.",
+                    parse_mode="Markdown"
+                )
+                return
+                
+            days = int(call.data.replace("premium_", ""))
+            bot_state.broadcast_state[user_id] = {"step": "waiting_user_id", "premium_days": days}
+            bot.send_message(
+                user_id,
+                f"💎 **Owner Premium Activation**\n\nSend the user ID to make premium for {days} days:",
+                parse_mode="Markdown"
+            )
+
+        elif call.data == "admin_remove_premium" and broadcast_bot.is_admin(user_id):
+            if str(user_id) != OWNER_ID:
+                bot.send_message(
+                    user_id,
+                    "🔒 **Owner Only Feature!**\n\nOnly the bot owner can remove premium access.",
+                    parse_mode="Markdown"
+                )
+                return
+            bot_state.broadcast_state[user_id] = {"step": "waiting_user_id_remove"}
+            bot.send_message(user_id, "🗑 **Remove Premium**\n\nSend the user ID to remove premium:")
+
+        elif call.data == "admin_premium_stats" and broadcast_bot.is_admin(user_id):
+            premium_users = broadcast_bot.get_premium_users()
+            expired_users = broadcast_bot.get_expired_premium_users()
+            
+            stats_text = f"""
+📊 **Premium Statistics**
+
+**💎 Active Premium Users:** `{len(premium_users)}`
+**⏰ Expired Premium Users:** `{len(expired_users)}`
+
+**📈 Revenue Estimation:**
+• 1 Month Plans: ₹{len(premium_users) * 299}
+• 3 Month Plans: ₹{len(premium_users) * 799}
+• 6 Month Plans: ₹{len(premium_users) * 1499}
+• 1 Year Plans: ₹{len(premium_users) * 2499}
+
+**🔧 Quick Actions:**
+• Make users premium
+• Remove premium access
+• View detailed analytics
+            """
+            bot.send_message(user_id, stats_text, parse_mode="Markdown")
+
+        elif call.data == "cleanup_all_messages":
+            if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+                bot.answer_callback_query(call.id, "🔒 Premium Required!")
+                return
+                
+            # Delete all broadcast messages
+            deleted_count = 0
+            failed_count = 0
+            
+            try:
+                # Get all broadcast messages for this user
+                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+                
+                status_msg = bot.send_message(
+                    user_id,
+                    f"🗑 **Deleting {len(broadcast_messages)} messages...**\n\n⏳ Please wait...",
+                    parse_mode="Markdown"
+                )
+                
+                for i, msg in enumerate(broadcast_messages):
+                    try:
+                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
+                        if result:
+                            deleted_count += 1
+                        else:
+                            failed_count += 1
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
+                    
+                    # Update progress every 10 messages
+                    if (i + 1) % 10 == 0:
+                        try:
+                            bot.edit_message_text(
+                                f"🗑 **Deleting Messages Progress**\n\n"
+                                f"✅ Deleted: {deleted_count}\n"
+                                f"❌ Failed: {failed_count}\n"
+                                f"📊 Progress: {i + 1}/{len(broadcast_messages)}",
+                                user_id, status_msg.message_id,
+                                parse_mode="Markdown"
+                            )
+                        except:
+                            pass
+                
+                # Clear broadcast history from database
+                broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+                
+                result_text = f"""
+🗑 **Message Cleanup Completed!**
+
+📊 **Results:**
+• ✅ Messages Deleted: `{deleted_count}`
+• ❌ Failed Deletions: `{failed_count}`
+• 📋 History Cleared: ✅
+
+✅ All broadcast messages have been removed from channels.
+                """
+                bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+                
+            except Exception as e:
+                logger.error(f"Error in cleanup_all_messages: {e}")
+                bot.send_message(user_id, "❌ Error during message cleanup process")
+
+        elif call.data == "cleanup_stop_reposts":
+            if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+                bot.answer_callback_query(call.id, "🔒 Premium Required!")
+                return
+                
+            # Stop all reposts
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+                
+                bot.send_message(
+                    user_id, 
+                    "⏹ **All Auto Reposts Stopped!**\n\n✅ All repost cycles have been terminated.",
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(user_id, "⚠️ No active auto reposts found.")
+
+        elif call.data == "cleanup_everything":
+            if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+                bot.answer_callback_query(call.id, "🔒 Premium Required!")
+                return
+                
+            # Stop all reposts
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+            
+            # Delete all broadcast messages
+            deleted_count = 0
+            failed_count = 0
+            
+            try:
+                # Get all broadcast messages for this user
+                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+                
+                status_msg = bot.send_message(
+                    user_id,
+                    f"🧹 **Complete Cleanup in Progress...**\n\n"
+                    f"🗑 Deleting {len(broadcast_messages)} messages\n"
+                    f"⏹ Stopping all reposts\n\n"
+                    f"⏳ Please wait...",
+                    parse_mode="Markdown"
+                )
+                
+                for i, msg in enumerate(broadcast_messages):
+                    try:
+                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
+                        if result:
+                            deleted_count += 1
+                        else:
+                            failed_count += 1
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
+                    
+                    # Update progress every 10 messages
+                    if (i + 1) % 10 == 0:
+                        try:
+                            bot.edit_message_text(
+                                f"🧹 **Complete Cleanup Progress**\n\n"
+                                f"🗑 Messages Deleted: {deleted_count}\n"
+                                f"❌ Failed: {failed_count}\n"
+                                f"⏹ Reposts Stopped: ✅\n"
+                                f"📊 Progress: {i + 1}/{len(broadcast_messages)}",
+                                user_id, status_msg.message_id,
+                                parse_mode="Markdown"
+                            )
+                        except:
+                            pass
+                
+                # Clear broadcast history from database
+                broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+                
+                result_text = f"""
+🧹 **Complete Cleanup Finished!**
+
+📊 **Results:**
+• ✅ Messages Deleted: `{deleted_count}`
+• ❌ Failed Deletions: `{failed_count}`
+• ⏹ Reposts Stopped: ✅
+• 📋 History Cleared: ✅
+
+✅ Complete cleanup completed successfully!
+                """
+                bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+                
+            except Exception as e:
+                logger.error(f"Error in cleanup_everything: {e}")
+                bot.send_message(user_id, "❌ Error during complete cleanup process")
+
+        elif call.data == "cleanup_cancel":
+            bot.send_message(user_id, "❌ Cleanup operation cancelled.")
+
+        elif call.data == "cleanup_menu":
+            if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+                bot.answer_callback_query(call.id, "🔒 Premium Required!")
+                return
+                
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🗑 Delete All Messages", callback_data="cleanup_all_messages"),
+                types.InlineKeyboardButton("⏹ Stop All Reposts", callback_data="cleanup_stop_reposts"),
+                types.InlineKeyboardButton("🗑 Delete & Stop All", callback_data="cleanup_everything"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="cleanup_cancel"),
+            )
+            
+            cleanup_text = f"""
+🧹 **Auto Cleanup System** ⚡
+
+**🔧 Available Actions:**
+• 🗑 **Delete All Messages** - Remove all broadcast messages from channels
+• ⏹ **Stop All Reposts** - Stop all active auto reposts
+• 🗑 **Delete & Stop All** - Complete cleanup (messages + reposts)
+
+**⚠️ Warning:** These actions cannot be undone!
+
+**💡 Choose an option:**
+            """
+            bot.send_message(user_id, cleanup_text, reply_markup=markup, parse_mode="Markdown")
+
+        if state:
+            bot_state.broadcast_state[user_id] = state
 
     except Exception as e:
-        logger.error(f"Error in callback handler: {e}")
-        bot.answer_callback_query(call.id, "❌ An error occurred")
+        logger.error(f"Callback error: {e}")
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    """Enhanced message handler with better validation"""
+    """Advanced message handler"""
+    user_id = message.chat.id
     
-    # Debug logging
-    logger.info(f"Message received from {message.chat.id}: {message.content_type}")
-    logger.info(f"User state: {bot_state.broadcast_state.get(message.chat.id)}")
-    
-    # Check if user is authorized (active users, premium users, or admins)
-    if not (broadcast_bot.is_authorized(message.chat.id) or 
-            broadcast_bot.is_premium(message.chat.id) or 
-            broadcast_bot.is_admin(message.chat.id)):
-        bot.send_message(
-            message.chat.id, 
-            "🚫 **Access Denied!**\n\nYou are not authorized to use this bot.\n\nContact admin to get access.",
-            parse_mode="Markdown"
-        )
+    if not (broadcast_bot.is_authorized(user_id) or 
+            broadcast_bot.is_premium(user_id) or 
+            broadcast_bot.is_admin(user_id)):
+        bot.send_message(user_id, "🚫 Access Denied! Contact admin.")
         return
 
-    # Debug logging for forwarded messages
-    if message.forward_from_chat:
-        logger.info(f"Forwarded message detected: {message.content_type} from {message.forward_from_chat.title}")
-        logger.info(f"Message caption: {message.caption}")
-        logger.info(f"User state: {bot_state.broadcast_state.get(message.chat.id)}")
-
     try:
-        state = bot_state.broadcast_state.get(message.chat.id)
+        state = bot_state.broadcast_state.get(user_id)
 
-        # Handle broadcast message
         if state and state.get("step") == "waiting_msg":
-            # Check if it's a forwarded message
-            if message.forward_from_chat:
-                # Handle forwarded message for broadcast
-                state["message"] = message
-                state["step"] = "ask_repost"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
-                )
-                
-                # Show detailed message preview
-                preview_text = f"📢 **Forwarded Message Preview:**\n\n"
-                preview_text += f"**Type:** {message.content_type}\n"
-                preview_text += f"**From Channel:** {message.forward_from_chat.title}\n"
-                if message.caption:
-                    preview_text += f"**Caption:** {message.caption[:150]}{'...' if len(message.caption) > 150 else ''}\n"
-                else:
-                    preview_text += f"**Caption:** No caption\n"
-                preview_text += f"**Message ID:** {message.message_id}\n"
-                preview_text += f"**Forward Date:** {message.forward_date}\n\n"
-                preview_text += "♻️ Do you want to Auto Repost this forwarded message?"
-                
-                try:
-                    bot.send_message(message.chat.id, preview_text, reply_markup=markup, parse_mode="Markdown")
-                    logger.info(f"Forwarded message preview sent successfully for {message.content_type}")
-                except Exception as e:
-                    # Fallback without Markdown
-                    bot.send_message(message.chat.id, preview_text, reply_markup=markup)
-                    logger.error(f"Error sending preview with Markdown: {e}")
-            else:
-                # Handle regular message for broadcast
-                state["message"] = message
-                state["step"] = "ask_repost"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
-                )
-                bot.send_message(message.chat.id, "♻️ Do you want to Auto Repost this message?", reply_markup=markup)
-                logger.info(f"Regular message preview sent successfully for {message.content_type}")
+            state["message"] = message
+            state["step"] = "ask_repost"
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
+                types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+            )
+            bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
             return
 
-        # Handle repost time input
-        if state and state.get("step") == "ask_repost_time":
-            try:
-                minutes = int(message.text.strip())
-                if minutes < 1:
-                    bot.send_message(message.chat.id, "⚠️ Please enter a number greater than 0.")
-                    return
-                state["repost_time"] = minutes
-                state["step"] = "ask_autodelete"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-                )
-                bot.send_message(message.chat.id, "🗑 Do you want Auto Delete for this message?", reply_markup=markup)
-            except ValueError:
-                bot.send_message(message.chat.id, "⚠️ Please enter a valid number (minutes).")
-            return
-
-        # Handle auto delete time input
+        # Handle custom auto delete time input
         if state and state.get("step") == "ask_autodelete_time":
             try:
                 minutes = int(message.text.strip())
                 if minutes < 1:
-                    bot.send_message(message.chat.id, "⚠️ Please enter a number greater than 0.")
+                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
                     return
+                if minutes > 43200:  # 30 days
+                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum delete time is 30 days (43200 minutes).")
+                    return
+                    
                 state["delete_time"] = minutes
-                finish_broadcast(message.chat.id)
-            except ValueError:
-                bot.send_message(message.chat.id, "⚠️ Please enter a valid number (minutes).")
-            return
-
-        # Handle scheduled broadcast message
-        if state and state.get("step") == "schedule_msg":
-            state["message"] = message
-            hours = state.get("hours", 1)  # Default 1 hour if not specified
-            
-            # Calculate schedule time
-            schedule_time = datetime.now() + timedelta(hours=hours)
-            state["schedule_time"] = schedule_time
-            state["step"] = "schedule_confirm"
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("✅ Confirm Schedule", callback_data="confirm_schedule"),
-                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_schedule"),
-            )
-            
-            bot.send_message(
-                message.chat.id,
-                f"📅 **Schedule Confirmation**\n\n**Message:** {message.content_type}\n**Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n**Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`\n\nConfirm to schedule this broadcast?",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-            return
-
-        # Handle schedule time input
-        if state and state.get("step") == "schedule_time":
-            try:
-                schedule_time = datetime.strptime(message.text.strip(), "%Y-%m-%d %H:%M")
-                if schedule_time <= datetime.now():
-                    bot.send_message(message.chat.id, "⚠️ Schedule time must be in the future!")
-                    return
                 
-                state["schedule_time"] = schedule_time
-                state["step"] = "schedule_confirm"
-                
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("✅ Confirm Schedule", callback_data="confirm_schedule"),
-                    types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_schedule"),
-                )
-                
+                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
                 bot.send_message(
-                    message.chat.id,
-                    f"📅 **Schedule Confirmation**\n\n**Message:** {message.content_type}\n**Schedule Time:** `{schedule_time.strftime('%Y-%m-%d %H:%M')}`\n**Your Channels:** `{broadcast_bot.get_channel_count(message.chat.id)}`\n\nConfirm to schedule this broadcast?",
-                    reply_markup=markup,
+                    user_id,
+                    f"✅ **Auto delete set to {time_display}**\n\n⏳ Starting broadcast...",
                     parse_mode="Markdown"
                 )
-                
+                finish_advanced_broadcast(user_id)
             except ValueError:
-                bot.send_message(message.chat.id, "⚠️ Invalid time format. Use: YYYY-MM-DD HH:MM")
+                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
             return
 
-        # Handle forwarded messages (auto-detect channels OR broadcast)
-        if message.forward_from_chat and message.forward_from_chat.type in ['channel', 'supergroup']:
-            # Check if user is in broadcast mode
-            if state and state.get("step") == "waiting_msg":
-                # User wants to broadcast this forwarded message
-                state["message"] = message
-                state["step"] = "ask_repost"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="repost_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="repost_no"),
-                )
-                bot.send_message(message.chat.id, "♻️ Do you want to Auto Repost this forwarded message?", reply_markup=markup)
-                return
-            
-            # Regular channel detection (not in broadcast mode)
+        # Handle admin premium management
+        if state and state.get("step") == "waiting_user_id" and broadcast_bot.is_admin(user_id):
             try:
-                channel_id = message.forward_from_chat.id
-                channel_title = message.forward_from_chat.title
-                channel_username = getattr(message.forward_from_chat, 'username', None)
+                target_user_id = int(message.text.strip())
+                premium_days = state.get("premium_days", 30)
                 
-                # Check if user is admin in this channel
-                try:
-                    member = bot.get_chat_member(channel_id, message.chat.id)
-                    if member.status in ['administrator', 'creator']:
-                        if broadcast_bot.add_channel(channel_id, message.chat.id):
-                            success_msg = f"✅ **Channel Added Successfully!**\n\n📢 **Channel:** `{channel_title}`\n🆔 **ID:** `{channel_id}`"
-                            if channel_username:
-                                success_msg += f"\n🔗 **Username:** @{channel_username}"
-                            success_msg += f"\n\n✅ Channel is ready for broadcasting!"
-                            
-                            bot.send_message(message.chat.id, success_msg, parse_mode="Markdown")
-                        else:
-                            bot.send_message(message.chat.id, f"⚠️ Channel `{channel_title}` already exists in your list", parse_mode="Markdown")
-                    else:
-                        bot.send_message(
-                            message.chat.id, 
-                            f"❌ **Access Denied!**\n\nYou need to be an **admin** in `{channel_title}` to add it.\n\nPlease make yourself admin and try again.",
-                            parse_mode="Markdown"
-                        )
-                except Exception as e:
+                if broadcast_bot.make_premium(target_user_id, premium_days):
                     bot.send_message(
-                        message.chat.id,
-                        f"❌ **Error!**\n\nCould not verify your admin status in `{channel_title}`.\n\nMake sure:\n• You're admin in the channel\n• Bot has permission to check member status",
+                        user_id,
+                        f"✅ **Owner Premium Activation Successful!**\n\n"
+                        f"**User ID:** `{target_user_id}`\n"
+                        f"**Duration:** {premium_days} days\n"
+                        f"**Status:** Active\n"
+                        f"**👑 Activated By:** Owner",
                         parse_mode="Markdown"
                     )
-                    logger.error(f"Error checking admin status for {channel_id}: {e}")
                     
-            except Exception as e:
-                logger.error(f"Error processing forwarded message: {e}")
-                bot.send_message(message.chat.id, "❌ Error processing forwarded message")
-            return
-
-        # Handle user management actions
-        user_session = bot_state.user_sessions.get(message.chat.id)
-        if user_session:
-            action = user_session.get("action")
-            step = user_session.get("step")
-            
-            if step == "waiting_user_id":
-                try:
-                    user_id = int(message.text.strip())
-                    
-                    if action == "activate_user":
-                        if broadcast_bot.activate_user(user_id, message.chat.id):
-                            bot.send_message(
-                                message.chat.id,
-                                f"✅ **User Activated Successfully!**\n\n**User ID:** `{user_id}`\n**Activated by:** `{message.chat.id}`\n\nUser can now use the bot.",
-                                parse_mode="Markdown"
-                            )
-                        else:
-                            bot.send_message(message.chat.id, "❌ Failed to activate user. User might not exist.")
-                    
-                    elif action == "deactivate_user":
-                        if broadcast_bot.deactivate_user(user_id, message.chat.id):
-                            bot.send_message(
-                                message.chat.id,
-                                f"✅ **User Deactivated Successfully!**\n\n**User ID:** `{user_id}`\n**Deactivated by:** `{message.chat.id}`\n\nUser can no longer use the bot.",
-                                parse_mode="Markdown"
-                            )
-                        else:
-                            bot.send_message(message.chat.id, "❌ Failed to deactivate user. User might not exist.")
-                    
-                    elif action == "give_premium":
-                        user_session["user_id"] = user_id
-                        user_session["step"] = "waiting_days"
-                        bot_state.user_sessions[message.chat.id] = user_session
+                    # Notify the user
+                    try:
                         bot.send_message(
-                            message.chat.id,
-                            f"⭐ **Give Premium**\n\n**User ID:** `{user_id}`\n\nSend the number of days for premium access.\n\n**Format:** `30` (for 30 days)"
-                        )
-                        return
-                    
-                    elif action == "revoke_premium":
-                        if broadcast_bot.revoke_premium(user_id, message.chat.id):
-                            bot.send_message(
-                                message.chat.id,
-                                f"✅ **Premium Revoked Successfully!**\n\n**User ID:** `{user_id}`\n**Revoked by:** `{message.chat.id}`\n\nUser's premium access has been removed.",
-                                parse_mode="Markdown"
-                            )
-                        else:
-                            bot.send_message(message.chat.id, "❌ Failed to revoke premium. User might not exist or not have premium.")
-                    
-                    # Clear session after action
-                    bot_state.user_sessions.pop(message.chat.id, None)
-                    
-                except ValueError:
-                    bot.send_message(message.chat.id, "⚠️ Invalid user ID format. Please send a valid number.")
-                return
-            
-            elif step == "waiting_days" and action == "give_premium":
-                try:
-                    days = int(message.text.strip())
-                    if days < 1:
-                        bot.send_message(message.chat.id, "⚠️ Please enter a number greater than 0.")
-                        return
-                    
-                    user_id = user_session.get("user_id")
-                    if broadcast_bot.give_premium(user_id, days, message.chat.id):
-                        bot.send_message(
-                            message.chat.id,
-                            f"✅ **Premium Given Successfully!**\n\n**User ID:** `{user_id}`\n**Days:** `{days}`\n**Given by:** `{message.chat.id}`\n\nUser now has premium access for {days} days.",
+                            target_user_id,
+                            f"🎉 **Premium Activated by Owner!**\n\n"
+                            f"✅ Your premium access has been activated!\n"
+                            f"⏰ **Duration:** {premium_days} days\n"
+                            f"🔓 **Access:** Full bot features unlocked\n"
+                            f"👑 **Activated By:** Bot Owner\n\n"
+                            f"Use /start to access the bot!",
                             parse_mode="Markdown"
                         )
-                    else:
-                        bot.send_message(message.chat.id, "❌ Failed to give premium. User might not exist.")
+                    except:
+                        pass
+                else:
+                    bot.send_message(user_id, f"❌ Failed to activate premium for user `{target_user_id}`", parse_mode="Markdown")
+                
+                bot_state.broadcast_state.pop(user_id, None)
+            except ValueError:
+                bot.send_message(user_id, "⚠️ Invalid user ID. Please enter a valid number.")
+            return
+
+        elif state and state.get("step") == "waiting_user_id_remove" and broadcast_bot.is_admin(user_id):
+            try:
+                target_user_id = int(message.text.strip())
+                
+                if broadcast_bot.remove_premium(target_user_id):
+                    bot.send_message(
+                        user_id,
+                        f"✅ **Owner Premium Removal Successful!**\n\n"
+                        f"**User ID:** `{target_user_id}`\n"
+                        f"**Status:** Premium access revoked\n"
+                        f"**👑 Removed By:** Owner",
+                        parse_mode="Markdown"
+                    )
                     
-                    # Clear session
-                    bot_state.user_sessions.pop(message.chat.id, None)
-                    
-                except ValueError:
-                    bot.send_message(message.chat.id, "⚠️ Invalid number format. Please send a valid number.")
-                return
+                    # Notify the user
+                    try:
+                        bot.send_message(
+                            target_user_id,
+                            f"⚠️ **Premium Removed by Owner**\n\n"
+                            f"❌ Your premium access has been removed.\n"
+                            f"🔒 **Access:** Bot features locked\n"
+                            f"👑 **Removed By:** Bot Owner\n\n"
+                            f"Contact owner to renew premium!",
+                            parse_mode="Markdown"
+                        )
+                    except:
+                        pass
+                else:
+                    bot.send_message(user_id, f"❌ Failed to remove premium from user `{target_user_id}`", parse_mode="Markdown")
+                
+                bot_state.broadcast_state.pop(user_id, None)
+            except ValueError:
+                bot.send_message(user_id, "⚠️ Invalid user ID. Please enter a valid number.")
+            return
 
         # Handle channel ID input
         if message.text and message.text.startswith("-100"):
-            try:
-                ch_id = int(message.text.strip())
-                
-                # Verify the channel exists and user has access
+            state = bot_state.broadcast_state.get(user_id, {})
+            
+            # Check if user is in bulk add mode
+            if state.get("step") == "bulk_add_channels":
+                # Handle bulk channel addition
                 try:
-                    chat_info = bot.get_chat(ch_id)
-                    member = bot.get_chat_member(ch_id, message.chat.id)
+                    # Parse channel IDs from different formats
+                    channel_text = message.text.strip()
+                    channel_ids = []
                     
-                    if member.status in ['administrator', 'creator']:
-                        if broadcast_bot.add_channel(ch_id, message.chat.id):
-                            success_msg = f"✅ **Channel Added Successfully!**\n\n📢 **Channel:** `{chat_info.title}`\n🆔 **ID:** `{ch_id}`"
-                            if hasattr(chat_info, 'username') and chat_info.username:
-                                success_msg += f"\n🔗 **Username:** @{chat_info.username}"
-                            success_msg += f"\n\n✅ Channel is ready for broadcasting!"
-                            
-                            bot.send_message(message.chat.id, success_msg, parse_mode="Markdown")
-                        else:
-                            bot.send_message(message.chat.id, f"⚠️ Channel `{chat_info.title}` already exists in your list", parse_mode="Markdown")
+                    # Split by newlines, commas, or spaces
+                    if '\n' in channel_text:
+                        # Format: -1001234567890\n-1001234567891
+                        channel_ids = [line.strip() for line in channel_text.split('\n') if line.strip().startswith('-100')]
+                    elif ',' in channel_text:
+                        # Format: -1001234567890, -1001234567891
+                        channel_ids = [ch.strip() for ch in channel_text.split(',') if ch.strip().startswith('-100')]
                     else:
-                        bot.send_message(
-                            message.chat.id,
-                            f"❌ **Access Denied!**\n\nYou need to be an **admin** in `{chat_info.title}` to add it.\n\nPlease make yourself admin and try again.",
-                            parse_mode="Markdown"
-                        )
-                except Exception as e:
-                    bot.send_message(message.chat.id, "❌ Invalid channel ID or you don't have access to this channel")
-                    logger.error(f"Error verifying channel {ch_id}: {e}")
+                        # Single channel
+                        channel_ids = [channel_text]
                     
-            except ValueError:
-                bot.send_message(message.chat.id, "⚠️ Invalid channel ID format. Use format: -1001234567890")
-            except Exception as e:
-                logger.error(f"Error adding channel: {e}")
-                bot.send_message(message.chat.id, "❌ Error adding channel")
-
-    except Exception as e:
-        logger.error(f"Error in message handler: {e}")
-        bot.send_message(message.chat.id, "❌ An error occurred while processing your message")
-
-def finish_broadcast(chat_id: int):
-    """Enhanced broadcast completion with better error handling"""
-    try:
-        state = bot_state.broadcast_state.get(chat_id)
-        if not state:
-            return
-
-        message = state["message"]
-        repost_time = state.get("repost_time")
-        delete_time = state.get("delete_time")
-
-        # Log message details for debugging
-        logger.info(f"Starting broadcast for user {chat_id}")
-        logger.info(f"Message type: {message.content_type}")
-        logger.info(f"Message ID: {message.message_id}")
-        if message.forward_from_chat:
-            logger.info(f"Forwarded from: {message.forward_from_chat.title}")
-        if message.caption:
-            logger.info(f"Caption: {message.caption[:100]}...")
-
-        # Generate unique broadcast ID
-        broadcast_id = f"broadcast_{chat_id}_{int(time.time())}"
-        
-        channels = broadcast_bot.get_all_channels(chat_id)
-        sent_count = 0
-        failed_count = 0
-        failed_channels = []
-
-        for ch in channels:
-            try:
-                sent = None
-                channel_id = ch["channel_id"]
-                
-                if message.content_type == "text":
-                    sent = bot.send_message(channel_id, message.text)
-                elif message.content_type == "photo":
-                    # Handle photo with caption (text, links, formatting)
-                    caption = message.caption or ""
+                    # Limit to 100 channels
+                    if len(channel_ids) > 100:
+                        bot.send_message(user_id, "⚠️ **Too Many Channels**\n\nMaximum 100 channels allowed at once.")
+                        return
                     
-                    # Simple and reliable method - try forwarding first, then sending
-                    try:
-                        # Method 1: Forward the original message (preserves everything)
-                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-                        logger.info(f"Photo forwarded successfully to {channel_id}")
-                    except Exception as forward_error:
-                        logger.warning(f"Forward failed, trying to send: {forward_error}")
+                    # Process channels
+                    success_count = 0
+                    failed_count = 0
+                    already_exists = 0
+                    failed_channels = []
+                    
+                    status_msg = bot.send_message(
+                        user_id,
+                        f"📋 **Adding {len(channel_ids)} channels...**\n\n⏳ Please wait...",
+                        parse_mode="Markdown"
+                    )
+                    
+                    for i, ch_id_str in enumerate(channel_ids):
                         try:
-                            # Method 2: Send photo with caption
-                            sent = bot.send_photo(
-                                channel_id, 
-                                message.photo[-1].file_id, 
-                                caption=caption
-                            )
-                            logger.info(f"Photo sent successfully to {channel_id}")
-                        except Exception as send_error:
-                            logger.error(f"Photo send failed to {channel_id}: {send_error}")
-                            raise send_error
-                elif message.content_type == "video":
-                    # Handle video with caption (text, links, formatting)
-                    caption = message.caption or ""
-                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
-                    
-                    try:
-                        sent = bot.send_video(
-                            channel_id, 
-                            message.video.file_id, 
-                            caption=caption,
-                            parse_mode=parse_mode
-                        )
-                    except Exception as caption_error:
-                        logger.warning(f"Markdown parsing failed for video caption, sending as plain text: {caption_error}")
-                        sent = bot.send_video(
-                            channel_id, 
-                            message.video.file_id, 
-                            caption=caption
-                        )
+                            ch_id = int(ch_id_str)
+                            chat_info = bot.get_chat(ch_id)
+                            
+                            if broadcast_bot.add_channel(ch_id, user_id):
+                                success_count += 1
+                            else:
+                                already_exists += 1
+                                
+                        except Exception as e:
+                            failed_count += 1
+                            failed_channels.append(ch_id_str)
                         
-                elif message.content_type == "document":
-                    # Handle document with caption (text, links, formatting)
-                    caption = message.caption or ""
-                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
+                        # Update progress every 10 channels
+                        if (i + 1) % 10 == 0:
+                            try:
+                                bot.edit_message_text(
+                                    f"📋 **Adding Channels Progress**\n\n"
+                                    f"✅ Added: {success_count}\n"
+                                    f"⚠️ Already Exists: {already_exists}\n"
+                                    f"❌ Failed: {failed_count}\n"
+                                    f"📊 Progress: {i + 1}/{len(channel_ids)}",
+                                    user_id, status_msg.message_id,
+                                    parse_mode="Markdown"
+                                )
+                            except:
+                                pass
                     
-                    try:
-                        sent = bot.send_document(
-                            channel_id, 
-                            message.document.file_id, 
-                            caption=caption,
-                            parse_mode=parse_mode
-                        )
-                    except Exception as caption_error:
-                        logger.warning(f"Markdown parsing failed for document caption, sending as plain text: {caption_error}")
-                        sent = bot.send_document(
-                            channel_id, 
-                            message.document.file_id, 
-                            caption=caption
-                        )
-                        
-                elif message.content_type == "audio":
-                    # Handle audio with caption (text, links, formatting)
-                    caption = message.caption or ""
-                    parse_mode = "Markdown" if any(char in caption for char in ['*', '_', '`', '[', ']', '(', ')']) else None
-                    
-                    try:
-                        sent = bot.send_audio(
-                            channel_id, 
-                            message.audio.file_id, 
-                            caption=caption,
-                            parse_mode=parse_mode
-                        )
-                    except Exception as caption_error:
-                        logger.warning(f"Markdown parsing failed for audio caption, sending as plain text: {caption_error}")
-                        sent = bot.send_audio(
-                            channel_id, 
-                            message.audio.file_id, 
-                            caption=caption
-                        )
-                else:
-                    sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-
-                sent_count += 1
-                
-                # Save message ID for potential deletion
-                if sent:
-                    broadcast_bot.save_broadcast_message(chat_id, channel_id, sent.message_id, broadcast_id)
-
-                # Auto delete
-                if delete_time and sent:
-                    threading.Thread(
-                        target=auto_delete, args=(channel_id, sent.message_id, delete_time)
-                    ).start()
-
-            except Exception as e:
-                failed_count += 1
-                failed_channels.append(str(channel_id))
-                logger.error(f"❌ Failed in {channel_id} -> {e}")
-
-        # Send detailed results
-        result_text = f"""
-✅ **Broadcast Completed!**
+                    # Final result
+                    result_text = f"""
+✅ **Bulk Channel Addition Completed!**
 
 📊 **Results:**
-• Sent: `{sent_count}`
-• Failed: `{failed_count}`
-• Total Channels: `{len(channels)}`
+• ✅ Successfully Added: `{success_count}`
+• ⚠️ Already Exists: `{already_exists}`
+• ❌ Failed: `{failed_count}`
+• 📋 Total Processed: `{len(channel_ids)}`
 
-⏰ **Settings:**
-• Auto Repost: {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
-• Auto Delete: {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
-        """
-        
-        if failed_channels:
-            result_text += f"\n❌ **Failed Channels:**\n`{', '.join(failed_channels[:5])}`"
-            if len(failed_channels) > 5:
-                result_text += f"\n... and {len(failed_channels) - 5} more"
-
-        bot.send_message(chat_id, result_text, parse_mode="Markdown")
-
-        # Start auto repost if configured
-        if repost_time:
-            bot.send_message(
-                chat_id,
-                f"♻️ **Auto Repost Started!**\n\n⏱ Interval: `{repost_time} minutes`\n🗑 Auto Delete: {'✅' if delete_time else '❌'}\n\nUse ⏹ Stop Repost button to cancel.",
-                parse_mode="Markdown"
-            )
-            stop_flag = {"stop": False}
-            bot_state.active_reposts[chat_id] = stop_flag
-            threading.Thread(
-                target=auto_repost, args=(chat_id, message, repost_time, delete_time, stop_flag)
-            ).start()
-
-        bot_state.broadcast_state.pop(chat_id, None)
-
-    except Exception as e:
-        logger.error(f"Error in finish_broadcast: {e}")
-        bot.send_message(chat_id, "❌ An error occurred during broadcast")
-
-def stop_repost(chat_id: int):
-    """Stop active repost with confirmation"""
-    try:
-        if chat_id in bot_state.active_reposts:
-            bot_state.active_reposts[chat_id]["stop"] = True
-            del bot_state.active_reposts[chat_id]
-            bot.send_message(chat_id, "⏹ **Auto Repost stopped successfully!**", parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, "⚠️ No active repost running.")
-    except Exception as e:
-        logger.error(f"Error stopping repost: {e}")
-        bot.send_message(chat_id, "❌ Error stopping repost")
-
-def delete_broadcast_messages_from_channels(owner_id: int, broadcast_id: str = None):
-    """Delete all broadcast messages from channels"""
-    try:
-        messages = broadcast_bot.get_broadcast_messages(owner_id, broadcast_id)
-        if not messages:
-            return 0, 0
-        
-        deleted_count = 0
-        failed_count = 0
-        
-        for msg in messages:
-            try:
-                bot.delete_message(msg["channel_id"], msg["message_id"])
-                deleted_count += 1
-                logger.info(f"✅ Deleted message {msg['message_id']} from channel {msg['channel_id']}")
-            except Exception as e:
-                failed_count += 1
-                logger.error(f"❌ Failed to delete message {msg['message_id']} from channel {msg['channel_id']}: {e}")
-        
-        # Delete from database
-        broadcast_bot.delete_broadcast_messages(owner_id, broadcast_id)
-        
-        return deleted_count, failed_count
-        
-    except Exception as e:
-        logger.error(f"Error deleting broadcast messages: {e}")
-        return 0, 0
-
-def check_scheduled_broadcasts():
-    """Check and execute scheduled broadcasts"""
-    try:
-        scheduled_col = db["scheduled_broadcasts"]
-        now = datetime.now()
-        
-        # Find pending broadcasts that are due
-        pending_broadcasts = scheduled_col.find({
-            "status": "pending",
-            "schedule_time": {"$lte": now}
-        })
-        
-        for broadcast in pending_broadcasts:
-            try:
-                # Execute the scheduled broadcast
-                message_data = broadcast["message_data"]
-                channels = broadcast["channels"]
-                
-                sent_count = 0
-                for ch in channels:
+🕐 **Time:** `{datetime.now().strftime('%H:%M:%S')}`
+                    """
+                    
+                    if failed_channels:
+                        failed_list = ', '.join(failed_channels[:5])
+                        if len(failed_channels) > 5:
+                            failed_list += f" and {len(failed_channels) - 5} more"
+                        result_text += f"\n❌ **Failed Channels:**\n`{failed_list}`"
+                    
                     try:
-                        channel_id = ch["channel_id"]
-                        sent = None
-                        
-                        if message_data["content_type"] == "text":
-                            sent = bot.send_message(channel_id, message_data["text"])
-                        elif message_data["content_type"] == "photo":
-                            sent = bot.send_photo(channel_id, message_data["file_id"], caption=message_data["caption"])
-                        elif message_data["content_type"] == "video":
-                            sent = bot.send_video(channel_id, message_data["file_id"], caption=message_data["caption"])
-                        elif message_data["content_type"] == "document":
-                            sent = bot.send_document(channel_id, message_data["file_id"], caption=message_data["caption"])
-                        elif message_data["content_type"] == "audio":
-                            sent = bot.send_audio(channel_id, message_data["file_id"], caption=message_data["caption"])
-                        
-                        if sent:
-                            sent_count += 1
-                            # Save message ID
-                            broadcast_bot.save_broadcast_message(
-                                broadcast["owner_id"], 
-                                channel_id, 
-                                sent.message_id, 
-                                broadcast["broadcast_id"]
-                            )
-                            
-                    except Exception as e:
-                        logger.error(f"Failed to send scheduled broadcast to {ch.get('channel_id')}: {e}")
+                        bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+                    except:
+                        bot.send_message(user_id, result_text, parse_mode="Markdown")
+                    
+                    # Clear bulk add state
+                    bot_state.broadcast_state.pop(user_id, None)
+                    
+                except Exception as e:
+                    bot.send_message(user_id, f"❌ **Bulk Add Error:** {e}")
+                    bot_state.broadcast_state.pop(user_id, None)
                 
-                # Update status to completed
-                scheduled_col.update_one(
-                    {"_id": broadcast["_id"]},
-                    {"$set": {"status": "completed", "sent_count": sent_count}}
-                )
-                
-                # Notify owner
-                bot.send_message(
-                    broadcast["owner_id"],
-                    f"✅ **Scheduled Broadcast Completed!**\n\n📊 **Results:**\n• Messages Sent: `{sent_count}`\n• Total Channels: `{len(channels)}`\n• Broadcast ID: `{broadcast['broadcast_id']}`",
-                    parse_mode="Markdown"
-                )
-                
-            except Exception as e:
-                logger.error(f"Error executing scheduled broadcast {broadcast.get('broadcast_id')}: {e}")
-                
+            else:
+                # Handle single channel addition
+                try:
+                    ch_id = int(message.text.strip())
+                    chat_info = bot.get_chat(ch_id)
+                    
+                    if broadcast_bot.add_channel(ch_id, user_id):
+                        bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added!", parse_mode="Markdown")
+                    else:
+                        bot.send_message(user_id, f"⚠️ Channel already exists!")
+                except Exception as e:
+                    bot.send_message(user_id, f"❌ Error: {e}")
+
     except Exception as e:
-        logger.error(f"Error checking scheduled broadcasts: {e}")
-
-def start_scheduled_broadcast_checker():
-    """Start the scheduled broadcast checker thread"""
-    def checker_loop():
-        while True:
-            try:
-                check_scheduled_broadcasts()
-                check_expired_premium_users()
-                time.sleep(60)  # Check every minute
-            except Exception as e:
-                logger.error(f"Error in scheduled broadcast checker: {e}")
-                time.sleep(60)
-    
-    threading.Thread(target=checker_loop, daemon=True).start()
-
-def check_expired_premium_users():
-    """Check and clean expired premium users"""
-    try:
-        users = broadcast_bot.get_premium_users()
-        expired_count = 0
-        
-        for user in users:
-            if user.get("premium_expires") and user["premium_expires"] < datetime.now():
-                # Revoke expired premium
-                if broadcast_bot.revoke_premium(user["user_id"], OWNER_ID):
-                    expired_count += 1
-                    logger.info(f"Premium expired for user {user['user_id']}")
-        
-        if expired_count > 0:
-            logger.info(f"Cleaned {expired_count} expired premium users")
-            
-    except Exception as e:
-        logger.error(f"Error checking expired premium users: {e}")
-
-# Error handler for bot
-@bot.message_handler(func=lambda message: True)
-def error_handler(message):
-    """Global error handler"""
-    logger.error(f"Unhandled message: {message}")
+        logger.error(f"Message handler error: {e}")
 
 if __name__ == "__main__":
-    logger.info("🤖 Bot starting...")
+    logger.info("🚀 Advanced Broadcast Bot starting...")
     
-    # Start scheduled broadcast checker
-    start_scheduled_broadcast_checker()
-    logger.info("✅ Scheduled broadcast checker started")
+    # Update analytics on startup
+    broadcast_bot.update_analytics("active_users", 0)
     
-    # Simple polling
-    logger.info("🔄 Starting bot polling...")
-    bot.infinity_polling()
+    try:
+        bot.infinity_polling(none_stop=True, timeout=60)
+    except Exception as e:
+        logger.error(f"❌ Bot crashed: {e}")
+        # Auto-restart logic could be added here
