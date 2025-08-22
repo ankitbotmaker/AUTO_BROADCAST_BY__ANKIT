@@ -643,13 +643,26 @@ def auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[i
 def auto_delete(chat_id: int, msg_id: int, delete_time: int):
     """Auto delete function with improved error handling"""
     try:
+        logger.info(f"⏰ Auto delete scheduled for message {msg_id} from {chat_id} in {delete_time} minutes")
         time.sleep(delete_time * 60)
-        bot.delete_message(chat_id, msg_id)
-        logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+        
+        # Try to delete the message
+        result = bot.delete_message(chat_id, msg_id)
+        if result:
+            logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+        else:
+            logger.warning(f"⚠️ Failed to delete message {msg_id} from {chat_id} - message may not exist")
+            
     except Exception as e:
-        logger.error(f"❌ Delete failed for {chat_id} -> {e}")
+        logger.error(f"❌ Auto delete failed for {chat_id} -> {e}")
+        # Try alternative deletion method
+        try:
+            bot.delete_message(chat_id, msg_id)
+            logger.info(f"✅ Auto deleted message {msg_id} from {chat_id} (retry successful)")
+        except Exception as retry_error:
+            logger.error(f"❌ Auto delete retry failed for {chat_id} -> {retry_error}")
 
-@bot.message_handler(commands=["start", "history", "status", "myinfo", "test"])
+@bot.message_handler(commands=["start", "history", "status", "myinfo", "test", "testdelete"])
 def start_cmd(message):
     """Enhanced start command with better UI"""
     # Add user to database if not exists
@@ -679,6 +692,26 @@ def start_cmd(message):
             parse_mode="Markdown"
         )
         bot_state.broadcast_state[message.chat.id] = {"step": "waiting_msg"}
+        return
+        
+    if message.text == "/testdelete":
+        # Test auto delete function
+        test_msg = bot.send_message(
+            message.chat.id,
+            "🧪 **Auto Delete Test**\n\nThis message will be deleted in 10 seconds.\n\nTesting auto delete functionality...",
+            parse_mode="Markdown"
+        )
+        
+        # Start auto delete thread
+        threading.Thread(
+            target=auto_delete, args=(message.chat.id, test_msg.message_id, 0.1)  # 6 seconds
+        ).start()
+        
+        bot.send_message(
+            message.chat.id,
+            "⏰ Auto delete test started! Message will be deleted in 6 seconds.",
+            parse_mode="Markdown"
+        )
         return
         
     if message.text == "/history":
@@ -2509,11 +2542,6 @@ if __name__ == "__main__":
     start_scheduled_broadcast_checker()
     logger.info("✅ Scheduled broadcast checker started")
     
-    # Simple polling for both local and Heroku
+    # Simple polling
     logger.info("🔄 Starting bot polling...")
-    
-    try:
-        bot.infinity_polling(timeout=60, long_polling_timeout=60)
-    except Exception as e:
-        logger.error(f"Bot polling error: {e}")
-        raise
+    bot.infinity_polling()
