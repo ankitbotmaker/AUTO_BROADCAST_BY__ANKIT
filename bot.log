@@ -6268,3 +6268,4 @@ telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsucc
 
 2025-08-22 09:30:42,989 - TeleBot - ERROR - Infinity polling: polling exited
 2025-08-22 09:30:42,990 - TeleBot - ERROR - Break infinity polling
+2025-08-22 09:39:24,822 - __main__ - INFO - Regular message preview sent successfully for text
