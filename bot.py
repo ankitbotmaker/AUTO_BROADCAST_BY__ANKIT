@@ -440,6 +440,50 @@ def resolve_telegram_link(link: str) -> Optional[int]:
         logger.error(f"Error resolving link {link}: {e}")
         return None
 
+def auto_add_telegram_links(user_id: int, text: str) -> List[Dict]:
+    """Automatically add Telegram links as channels"""
+    added_channels = []
+    links = extract_telegram_links(text)
+    
+    for link in links:
+        try:
+            channel_id = resolve_telegram_link(link)
+            if channel_id:
+                # Check if channel already exists
+                existing = broadcast_bot.channels_col.find_one({
+                    "user_id": user_id,
+                    "channel_id": channel_id
+                })
+                
+                if not existing:
+                    # Get channel info
+                    chat_info = bot.get_chat(channel_id)
+                    channel_name = chat_info.title or chat_info.username or f"Channel {channel_id}"
+                    
+                    # Add channel to database
+                    broadcast_bot.add_channel(
+                        user_id=user_id,
+                        channel_id=channel_id,
+                        channel_name=channel_name,
+                        channel_type=chat_info.type,
+                        username=chat_info.username
+                    )
+                    
+                    added_channels.append({
+                        "channel_id": channel_id,
+                        "channel_name": channel_name,
+                        "username": chat_info.username
+                    })
+                    
+                    logger.info(f"Auto-added channel {channel_name} ({channel_id}) for user {user_id}")
+                else:
+                    logger.info(f"Channel {channel_id} already exists for user {user_id}")
+                    
+        except Exception as e:
+            logger.error(f"Error auto-adding channel {link}: {e}")
+    
+    return added_channels
+
 def send_message_to_channel(channel_data: Dict, message, broadcast_id: str, delete_time: Optional[int] = None) -> Dict:
     """Send message to a single channel (for concurrent processing)"""
     result = {
@@ -2102,7 +2146,32 @@ def handle_message(message):
             
             # Store original text as formatted text
             original_text = message.text or message.caption or ""
-            state["formatted_text"] = original_text
+            
+            # Auto-add Telegram links as channels and clean the text
+            added_channels = []
+            cleaned_text = original_text
+            if original_text:
+                added_channels = auto_add_telegram_links(user_id, original_text)
+                
+                # Remove Telegram links from the broadcast text
+                if added_channels:
+                    # Remove all Telegram links from the text
+                    import re
+                    # Remove t.me links
+                    cleaned_text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', '', cleaned_text)
+                    # Remove telegram.me links
+                    cleaned_text = re.sub(r'https?://telegram\.me/[a-zA-Z0-9_]+', '', cleaned_text)
+                    # Remove @username mentions
+                    cleaned_text = re.sub(r'@[a-zA-Z0-9_]+', '', cleaned_text)
+                    # Clean up extra whitespace
+                    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
+            
+            # Store cleaned text for broadcasting
+            if cleaned_text and cleaned_text.strip():
+                state["formatted_text"] = cleaned_text
+            else:
+                # If cleaned text is empty, use original text
+                state["formatted_text"] = original_text
             state["format_type"] = "plain"
             
             # Go directly to repost question
@@ -2112,10 +2181,21 @@ def handle_message(message):
                 types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
             )
             
+            # Prepare message with auto-added channels info
+            repost_message = "🔄 **Would you like to set auto repost?**\n\nYour message will be automatically reposted at regular intervals:"
+            
+            if added_channels:
+                channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
+                repost_message += f"\n\n✅ **Auto-added {len(added_channels)} channels:**\n{channel_list}"
+                
+                # Show what text will be broadcasted
+                if cleaned_text and cleaned_text != original_text:
+                    preview_text = cleaned_text[:100] + "..." if len(cleaned_text) > 100 else cleaned_text
+                    repost_message += f"\n\n📝 **Broadcast Text:**\n`{preview_text}`"
+            
             sent_msg = bot.send_message(
                 user_id, 
-                "🔄 **Would you like to set auto repost?**\n\n"
-                "Your message will be automatically reposted at regular intervals:",
+                repost_message,
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
