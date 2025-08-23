@@ -189,6 +189,45 @@ class AdvancedBroadcastBot:
         except Exception as e:
             logger.error(f"Error saving broadcast message: {e}")
 
+    def get_user_analytics(self, user_id: int) -> Dict:
+        """Get user analytics and statistics"""
+        try:
+            # Get user data
+            user_data = self.users_col.find_one({"user_id": user_id})
+            
+            # Get channel count
+            channel_count = self.channels_col.count_documents({"user_id": user_id})
+            
+            # Get broadcast count
+            broadcast_count = self.broadcast_messages_col.count_documents({"user_id": user_id})
+            
+            # Determine subscription type
+            subscription_type = "Free"
+            if user_data:
+                if user_data.get("is_premium"):
+                    subscription_type = "Premium"
+                elif user_data.get("is_authorized"):
+                    subscription_type = "Authorized"
+            
+            return {
+                "total_channels": channel_count,
+                "total_broadcasts": broadcast_count,
+                "subscription_type": subscription_type,
+                "is_premium": user_data.get("is_premium", False) if user_data else False,
+                "is_authorized": user_data.get("is_authorized", False) if user_data else False,
+                "premium_expires": user_data.get("premium_expires") if user_data else None
+            }
+        except Exception as e:
+            logger.error(f"Error getting user analytics for {user_id}: {e}")
+            return {
+                "total_channels": 0,
+                "total_broadcasts": 0,
+                "subscription_type": "Free",
+                "is_premium": False,
+                "is_authorized": False,
+                "premium_expires": None
+            }
+
     def is_admin(self, user_id: int) -> bool:
         """Check if user is admin"""
         return user_id in ADMIN_IDS
@@ -2255,15 +2294,36 @@ if __name__ == "__main__":
             # Heroku deployment - use polling (more reliable)
             logger.info("🌐 Starting on Heroku with polling...")
             
-            # Force remove webhook multiple times to ensure it's gone
-            for attempt in range(3):
+            # Force remove webhook using direct API call
+            import requests
+            
+            for attempt in range(5):
                 try:
-                    bot.remove_webhook()
-                    logger.info(f"✅ Webhook removal attempt {attempt + 1} successful")
-                    time.sleep(2)  # Wait between attempts
+                    # Direct API call to delete webhook
+                    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
+                    response = requests.post(delete_url, timeout=10)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get("ok"):
+                            logger.info(f"✅ Webhook deletion attempt {attempt + 1} successful")
+                            break
+                        else:
+                            logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed: {result}")
+                    else:
+                        logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed with status {response.status_code}")
+                    
+                    time.sleep(3)  # Wait between attempts
                 except Exception as e:
-                    logger.warning(f"⚠️ Webhook removal attempt {attempt + 1} failed: {e}")
-                    time.sleep(2)
+                    logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed: {e}")
+                    time.sleep(3)
+            
+            # Also try bot.remove_webhook() as backup
+            try:
+                bot.remove_webhook()
+                logger.info("✅ Backup webhook removal successful")
+            except Exception as e:
+                logger.warning(f"⚠️ Backup webhook removal failed: {e}")
             
             logger.info("🔄 Starting polling after webhook removal...")
             

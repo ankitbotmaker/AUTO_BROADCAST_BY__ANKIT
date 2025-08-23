@@ -1872,3 +1872,207 @@ Traceback (most recent call last):
     raise ApiTelegramException(method_name, result, result_json)
 telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
 
+2025-08-23 16:49:38,873 - TeleBot - ERROR - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+2025-08-23 16:49:38,885 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 112, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+
+2025-08-23 16:49:55,250 - TeleBot - ERROR - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+2025-08-23 16:49:55,261 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 112, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+
+2025-08-23 16:50:27,538 - TeleBot - ERROR - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+2025-08-23 16:50:27,549 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 112, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+
+2025-08-23 16:51:27,782 - TeleBot - ERROR - Threaded polling exception: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+2025-08-23 16:51:27,787 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1234, in __threaded_polling
+    polling_thread.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 112, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 688, in __retrieve_updates
+    updates = self.get_updates(offset=(self.last_update_id + 1),
+                               allowed_updates=allowed_updates,
+                               timeout=timeout, long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 660, in get_updates
+    json_updates = apihelper.get_updates(
+        self.token, offset=offset, limit=limit, timeout=timeout, allowed_updates=allowed_updates,
+        long_polling_timeout=long_polling_timeout)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 332, in get_updates
+    return _make_request(token, method_url, params=payload)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 168, in _make_request
+    json_result = _check_result(method_name, result)
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\apihelper.py", line 195, in _check_result
+    raise ApiTelegramException(method_name, result, result_json)
+telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsuccessful. Error code: 409. Description: Conflict: can't use getUpdates method while webhook is active; use deleteWebhook to delete the webhook first
+
+2025-08-23 16:51:34,840 - TeleBot - ERROR - Infinity polling exception: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+2025-08-23 16:51:34,861 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1110, in infinity_polling
+    self.polling(non_stop=True, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 logger_level=logger_level, allowed_updates=allowed_updates, restart_on_change=False,
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 *args, **kwargs)
+                 ^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1198, in polling
+    self.__threaded_polling(non_stop=non_stop, interval=interval, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            logger_level=logger_level, allowed_updates=allowed_updates)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1273, in __threaded_polling
+    raise e
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1235, in __threaded_polling
+    self.worker_pool.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 151, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 9854, in _run_middlewares_and_handler
+    result = handler['function'](message)
+  File "C:\Users\Administrator\bb\ankitbb\bot.py", line 1081, in start_cmd
+    user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+
+2025-08-23 16:51:37,870 - TeleBot - ERROR - Infinity polling exception: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+2025-08-23 16:51:37,884 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1110, in infinity_polling
+    self.polling(non_stop=True, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 logger_level=logger_level, allowed_updates=allowed_updates, restart_on_change=False,
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 *args, **kwargs)
+                 ^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1198, in polling
+    self.__threaded_polling(non_stop=non_stop, interval=interval, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            logger_level=logger_level, allowed_updates=allowed_updates)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1273, in __threaded_polling
+    raise e
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1235, in __threaded_polling
+    self.worker_pool.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 151, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 9854, in _run_middlewares_and_handler
+    result = handler['function'](message)
+  File "C:\Users\Administrator\bb\ankitbb\bot.py", line 1081, in start_cmd
+    user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+
+2025-08-23 16:51:40,892 - TeleBot - ERROR - Infinity polling exception: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+2025-08-23 16:51:40,906 - TeleBot - ERROR - Exception traceback:
+Traceback (most recent call last):
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1110, in infinity_polling
+    self.polling(non_stop=True, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 logger_level=logger_level, allowed_updates=allowed_updates, restart_on_change=False,
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                 *args, **kwargs)
+                 ^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1198, in polling
+    self.__threaded_polling(non_stop=non_stop, interval=interval, timeout=timeout, long_polling_timeout=long_polling_timeout,
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                            logger_level=logger_level, allowed_updates=allowed_updates)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1273, in __threaded_polling
+    raise e
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 1235, in __threaded_polling
+    self.worker_pool.raise_exceptions()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 151, in raise_exceptions
+    raise self.exception_info
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\util.py", line 94, in run
+    task(*args, **kwargs)
+    ~~~~^^^^^^^^^^^^^^^^^
+  File "C:\Users\Administrator\AppData\Local\Programs\Python\Python313\Lib\site-packages\telebot\__init__.py", line 9854, in _run_middlewares_and_handler
+    result = handler['function'](message)
+  File "C:\Users\Administrator\bb\ankitbb\bot.py", line 1081, in start_cmd
+    user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'AdvancedBroadcastBot' object has no attribute 'get_user_analytics'
+
