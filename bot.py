@@ -390,6 +390,16 @@ class AdvancedBroadcastBot:
         except Exception as e:
             logger.error(f"Error executing scheduled broadcast: {e}")
 
+    def get_broadcast_messages(self, user_id: int, limit: int = 100) -> List[Dict]:
+        """Get broadcast messages for a user"""
+        try:
+            return list(self.broadcast_messages_col.find(
+                {"user_id": user_id}
+            ).sort("sent_at", -1).limit(limit))
+        except Exception as e:
+            logger.error(f"Error getting broadcast messages for user {user_id}: {e}")
+            return []
+
 # Initialize broadcast bot
 broadcast_bot = AdvancedBroadcastBot()
 
@@ -602,15 +612,15 @@ def finish_advanced_broadcast(chat_id: int):
 ✅ **Broadcast Completed!**
 
 📊 **Results:**
-• ✅ Sent: `{sent_count}`
-• ❌ Failed: `{failed_count}`
-• 📢 Total Channels: `{len(channels)}`
-• 🕐 Broadcast Time: `{datetime.now().strftime('%H:%M:%S')}`
+• ✅ **Sent:** `{sent_count}`
+• ❌ **Failed:** `{failed_count}`
+• 📢 **Total Channels:** `{len(channels)}`
+• 🕐 **Broadcast Time:** `{datetime.now().strftime('%H:%M:%S')}`
 
 ⚙️ **Settings:**
-• 🔄 Auto Repost: {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
-• 🗑 Auto Delete: {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
-• 📋 Broadcast ID: `{broadcast_id}`
+• 🔄 **Auto Repost:** {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
+• 🗑 **Auto Delete:** {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
+• 📋 **Broadcast ID:** `{broadcast_id}`
         """
         
         if failed_channels:
@@ -698,29 +708,30 @@ def apply_message_formatting(user_id: int, format_type: str):
         state["formatted_text"] = formatted_text
         state["format_type"] = format_type
         
-        # Show preview
+        # Show preview and go directly to repost question
         preview_text = f"""
 🎨 **Formatting Applied: {format_name}**
 
 📝 **Preview:**
-{formatted_text[:200]}{'...' if len(formatted_text) > 200 else ''}
+**{formatted_text[:200]}{'...' if len(formatted_text) > 200 else ''}**
 
 ✅ **Ready to broadcast!**
         """
         
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("✅ Confirm & Continue", callback_data="format_confirm"),
-            types.InlineKeyboardButton("🔄 Try Different Format", callback_data="format_retry"),
-            types.InlineKeyboardButton("❌ Cancel", callback_data="format_cancel")
-        )
-        
         bot.send_message(
             user_id,
             preview_text,
-            reply_markup=markup,
             parse_mode="Markdown"
         )
+        
+        # Go directly to repost question
+        state["step"] = "ask_repost"
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
+            types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+        )
+        bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
         
     except Exception as e:
         logger.error(f"Error applying formatting: {e}")
@@ -882,7 +893,7 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
             logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
             time.sleep(60)
 
-@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id"])
+@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test"])
 def start_cmd(message):
     """Enhanced start command with analytics"""
     user_id = message.from_user.id
@@ -949,6 +960,19 @@ def start_cmd(message):
             logger.error(f"Error sending premium message: {e}")
             bot.send_message(message.chat.id, premium_text, reply_markup=markup, parse_mode="Markdown")
         
+        return
+    
+    if message.text.startswith("/test"):
+        # Test if bot is working
+        bot.send_message(
+            message.chat.id, 
+            "🧪 **Bot Test Successful!** ✅\n\n"
+            "🎯 **Bot Status:** Online\n"
+            "📡 **Connection:** Active\n"
+            "⚡ **Response Time:** Instant\n\n"
+            "✅ All systems are working correctly!"
+        )
+        logger.info(f"✅ Test command executed successfully by user {message.chat.id}")
         return
     
     if message.text.startswith("/stats"):
@@ -1106,6 +1130,7 @@ Choose an option:
         types.InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
     )
     markup.add(
+        types.InlineKeyboardButton("🧪 Test Bot", callback_data="test_button"),
         types.InlineKeyboardButton("⏹ Stop Repost", callback_data="stop_repost"),
         types.InlineKeyboardButton("🗑 Stop & Delete", callback_data="stop_and_delete"),
         types.InlineKeyboardButton("🛑 Instant Stop All", callback_data="instant_stop_all"),
@@ -1142,7 +1167,7 @@ Choose an option:
 • Use "🛑 Instant Stop All" for emergency stops
 • Use "🧹 Auto Cleanup" for complete cleanup
 
-Choose an option below:
+**Choose an option below:**
     """
     
     try:
@@ -1160,158 +1185,34 @@ Choose an option below:
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     """Advanced callback handler"""
+    logger.info(f"Callback received: {call.data} from user {call.message.chat.id}")
+    
     if not (broadcast_bot.is_authorized(call.message.chat.id) or 
             broadcast_bot.is_premium(call.message.chat.id) or 
             broadcast_bot.is_admin(call.message.chat.id)):
+        logger.warning(f"Access denied for user {call.message.chat.id}")
         bot.answer_callback_query(call.id, "🚫 Access Denied!")
         return
 
     try:
         user_id = call.message.chat.id
         state = bot_state.broadcast_state.get(user_id, {})
+        
+        logger.info(f"Processing callback: {call.data} for user {user_id}")
 
-        if call.data == "broadcast":
+        if call.data == "test_button":
+            logger.info("Test button pressed!")
+            bot.answer_callback_query(call.id, "✅ Test successful!")
+            bot.send_message(user_id, "🧪 **Test Successful!**\n\nBot is working correctly! ✅")
+            return
+
+        elif call.data == "broadcast":
+            logger.info(f"Broadcast button pressed by user {user_id}")
             bot_state.broadcast_state[user_id] = {"step": "waiting_msg"}
             bot.send_message(user_id, "📢 Send your broadcast message:")
 
-        elif call.data == "repost_yes":
-            state["step"] = "ask_repost_time"
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
-                types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
-                types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
-                types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60"),
-            )
-            bot.send_message(user_id, "⏱ Choose repost interval:", reply_markup=markup)
-            
-        elif call.data == "repost_no":
-            state["repost_time"] = None
-            state["step"] = "ask_autodelete"
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-            )
-            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
-            
-        elif call.data == "delete_yes":
-            state["step"] = "ask_autodelete_time"
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("🗑 5m", callback_data="delete_5"),
-                types.InlineKeyboardButton("🗑 10m", callback_data="delete_10"),
-                types.InlineKeyboardButton("🗑 15m", callback_data="delete_15"),
-                types.InlineKeyboardButton("🗑 30m", callback_data="delete_30"),
-                types.InlineKeyboardButton("🗑 1h", callback_data="delete_60"),
-                types.InlineKeyboardButton("🗑 2h", callback_data="delete_120"),
-                types.InlineKeyboardButton("🗑 6h", callback_data="delete_360"),
-                types.InlineKeyboardButton("🗑 12h", callback_data="delete_720"),
-                types.InlineKeyboardButton("🗑 24h", callback_data="delete_1440"),
-                types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
-            )
-            bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
-            
-        elif call.data == "delete_no":
-            state["delete_time"] = None
-            finish_advanced_broadcast(user_id)
-
-        elif call.data.startswith("repost_"):
-            time_value = int(call.data.replace("repost_", ""))
-            state["repost_time"] = time_value
-            state["step"] = "ask_autodelete"
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-            )
-            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
-
-        elif call.data.startswith("delete_"):
-            if call.data == "delete_custom":
-                state["step"] = "ask_autodelete_time"
-                bot.send_message(
-                    user_id, 
-                    "⏱ **Custom Delete Time**\n\n"
-                    "Enter delete time in minutes:\n\n"
-                    "📝 **Examples:**\n"
-                    "• `10` = 10 minutes\n"
-                    "• `60` = 1 hour\n"
-                    "• `1440` = 24 hours\n\n"
-                    "⚠️ **Minimum:** 1 minute"
-                )
-            else:
-                time_value = int(call.data.replace("delete_", ""))
-                state["delete_time"] = time_value
-                finish_advanced_broadcast(user_id)
-
-        elif call.data == "stop_repost":
-            stop_repost(user_id)
-            
-        # Formatting handlers
-        elif call.data.startswith("format_"):
-            if call.data == "format_skip":
-                # Skip formatting and go to repost question
-                state["step"] = "ask_repost"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
-                    types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
-                )
-                bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
-            else:
-                # Apply formatting
-                apply_message_formatting(user_id, call.data)
-                
-        elif call.data == "format_confirm":
-            # Confirm formatting and continue to repost
-            state["step"] = "ask_repost"
-            markup = types.InlineKeyboardMarkup()
-            markup.add(
-                types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
-                types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
-            )
-            bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
-            
-        elif call.data == "format_retry":
-            # Show formatting options again
-            state["step"] = "ask_formatting"
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📝 Plain Text", callback_data="format_plain"),
-                types.InlineKeyboardButton("🎨 Bold Text", callback_data="format_bold"),
-                types.InlineKeyboardButton("📋 Italic Text", callback_data="format_italic"),
-                types.InlineKeyboardButton("🔗 With Links", callback_data="format_links"),
-                types.InlineKeyboardButton("📊 Code Format", callback_data="format_code"),
-                types.InlineKeyboardButton("💬 Quote Style", callback_data="format_quote"),
-                types.InlineKeyboardButton("📌 Sticky Note", callback_data="format_sticky"),
-                types.InlineKeyboardButton("🎯 Highlight", callback_data="format_highlight"),
-                types.InlineKeyboardButton("🚀 Skip Formatting", callback_data="format_skip")
-            )
-            
-            bot.send_message(
-                user_id, 
-                "🎨 **Choose Message Formatting:**\n\n"
-                "Select how you want your message to appear:\n\n"
-                "• 📝 **Plain Text** - Simple text\n"
-                "• 🎨 **Bold Text** - **Bold formatting**\n"
-                "• 📋 **Italic Text** - *Italic formatting*\n"
-                "• 🔗 **With Links** - Clickable links\n"
-                "• 📊 **Code Format** - `Code blocks`\n"
-                "• 💬 **Quote Style** - > Quoted text\n"
-                "• 📌 **Sticky Note** - 📌 Pinned style\n"
-                "• 🎯 **Highlight** - ⚡ Highlighted\n"
-                "• 🚀 **Skip Formatting** - Continue without changes",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-            
-        elif call.data == "format_cancel":
-            # Cancel formatting and clear state
-            bot_state.broadcast_state.pop(user_id, None)
-            bot.send_message(user_id, "❌ Formatting cancelled. Send /start to try again.")
-            
         elif call.data == "stop_and_delete":
+            logger.info(f"Stop and Delete button pressed by user {user_id}")
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
                 types.InlineKeyboardButton("✅ Yes, Delete All", callback_data="confirm_delete_all"),
@@ -1329,55 +1230,8 @@ def callback_handler(call):
                 parse_mode="Markdown"
             )
             
-        elif call.data == "confirm_delete_all":
-            # Stop all reposts
-            if user_id in bot_state.active_reposts:
-                bot_state.active_reposts[user_id]["stop"] = True
-                del bot_state.active_reposts[user_id]
-            
-            # Delete all broadcast messages
-            deleted_count = 0
-            failed_count = 0
-            
-            try:
-                # Get all broadcast messages for this user
-                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
-                
-                for msg in broadcast_messages:
-                    try:
-                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
-                        if result:
-                            deleted_count += 1
-                        else:
-                            failed_count += 1
-                    except Exception as e:
-                        failed_count += 1
-                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
-                
-                # Clear broadcast history from database
-                broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
-                
-                result_text = f"""
-🗑 **Broadcast Cleanup Completed!**
-
-📊 **Results:**
-• ✅ Messages Deleted: `{deleted_count}`
-• ❌ Failed Deletions: `{failed_count}`
-• 🔄 Reposts Stopped: ✅
-• 📋 History Cleared: ✅
-
-✅ All broadcast messages have been removed from channels.
-                """
-                bot.send_message(user_id, result_text, parse_mode="Markdown")
-                
-            except Exception as e:
-                logger.error(f"Error in confirm_delete_all: {e}")
-                bot.send_message(user_id, "❌ Error during cleanup process")
-                
-        elif call.data == "cancel_delete":
-            bot.send_message(user_id, "❌ Operation cancelled.")
-
         elif call.data == "instant_stop_all":
+            logger.info(f"Instant Stop All button pressed by user {user_id}")
             # Instant stop all reposts and delete all messages
             if user_id in bot_state.active_reposts:
                 bot_state.active_reposts[user_id]["stop"] = True
@@ -1427,6 +1281,181 @@ def callback_handler(call):
 🎯 **All broadcasts stopped and deleted instantly!**
             """
             bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+
+        elif call.data == "repost_yes":
+            state["step"] = "ask_repost_time"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
+                types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
+                types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
+                types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60"),
+                types.InlineKeyboardButton("⏱ Custom Time", callback_data="repost_custom"),
+            )
+            bot.send_message(user_id, "⏱ Choose repost interval:", reply_markup=markup)
+            
+        elif call.data == "repost_no":
+            state["repost_time"] = None
+            state["step"] = "ask_autodelete"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
+                types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+            )
+            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
+            
+        elif call.data == "delete_yes":
+            state["step"] = "ask_autodelete_time"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🗑 5m", callback_data="delete_5"),
+                types.InlineKeyboardButton("🗑 10m", callback_data="delete_10"),
+                types.InlineKeyboardButton("🗑 15m", callback_data="delete_15"),
+                types.InlineKeyboardButton("🗑 30m", callback_data="delete_30"),
+                types.InlineKeyboardButton("🗑 1h", callback_data="delete_60"),
+                types.InlineKeyboardButton("🗑 2h", callback_data="delete_120"),
+                types.InlineKeyboardButton("🗑 6h", callback_data="delete_360"),
+                types.InlineKeyboardButton("🗑 12h", callback_data="delete_720"),
+                types.InlineKeyboardButton("🗑 24h", callback_data="delete_1440"),
+                types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
+            )
+            bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
+            
+        elif call.data == "delete_no":
+            state["delete_time"] = None
+            finish_advanced_broadcast(user_id)
+
+        elif call.data.startswith("repost_"):
+            if call.data == "repost_custom":
+                state["step"] = "ask_repost_time"
+                bot.send_message(
+                    user_id, 
+                    "⏱ **Custom Repost Time**\n\n"
+                    "Enter repost interval in minutes:\n\n"
+                    "📝 **Examples:**\n"
+                    "• `5` = 5 minutes\n"
+                    "• `30` = 30 minutes\n"
+                    "• `60` = 1 hour\n"
+                    "• `1440` = 24 hours\n\n"
+                    "⚠️ **Minimum:** 1 minute"
+                )
+            else:
+                time_value = int(call.data.replace("repost_", ""))
+                state["repost_time"] = time_value
+                state["step"] = "ask_autodelete"
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
+                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+                )
+                bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
+
+        elif call.data.startswith("delete_"):
+            if call.data == "delete_custom":
+                state["step"] = "ask_autodelete_time"
+                bot.send_message(
+                    user_id, 
+                    "⏱ **Custom Delete Time**\n\n"
+                    "Enter delete time in minutes:\n\n"
+                    "📝 **Examples:**\n"
+                    "• `10` = 10 minutes\n"
+                    "• `60` = 1 hour\n"
+                    "• `1440` = 24 hours\n\n"
+                    "⚠️ **Minimum:** 1 minute"
+                )
+            else:
+                time_value = int(call.data.replace("delete_", ""))
+                state["delete_time"] = time_value
+                finish_advanced_broadcast(user_id)
+
+        elif call.data == "stop_repost":
+            # Stop repost for this user
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+                bot.send_message(
+                    user_id, 
+                    "⏹ **Auto Repost Stopped!**\n\n✅ All repost cycles have been terminated.",
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.send_message(user_id, "⚠️ No active auto reposts found.")
+            
+        # Formatting handlers
+        elif call.data.startswith("format_"):
+            if call.data == "format_skip":
+                # Skip formatting and go to repost question
+                state["step"] = "ask_repost"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
+                    types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+                )
+                bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
+            else:
+                # Apply formatting
+                apply_message_formatting(user_id, call.data)
+                
+        elif call.data == "format_confirm":
+            # This is now handled directly in apply_message_formatting
+            pass
+            
+        elif call.data == "format_retry":
+            # This is now handled directly in apply_message_formatting
+            pass
+            
+        elif call.data == "format_cancel":
+            # Cancel formatting and clear state
+            bot_state.broadcast_state.pop(user_id, None)
+            bot.send_message(user_id, "❌ Formatting cancelled. Send /start to try again.")
+            
+        elif call.data == "confirm_delete_all":
+            # Stop all reposts
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+            
+            # Delete all broadcast messages
+            deleted_count = 0
+            failed_count = 0
+            
+            try:
+                # Get all broadcast messages for this user
+                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+                
+                for msg in broadcast_messages:
+                    try:
+                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
+                        if result:
+                            deleted_count += 1
+                        else:
+                            failed_count += 1
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
+                
+                # Clear broadcast history from database
+                broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+                
+                result_text = f"""
+🗑 **Broadcast Cleanup Completed!**
+
+📊 **Results:**
+• ✅ **Messages Deleted:** `{deleted_count}`
+• ❌ **Failed Deletions:** `{failed_count}`
+• 🔄 **Reposts Stopped:** ✅
+• 📋 **History Cleared:** ✅
+
+✅ **All broadcast messages have been removed from channels.**
+                """
+                bot.send_message(user_id, result_text, parse_mode="Markdown")
+                
+            except Exception as e:
+                logger.error(f"Error in confirm_delete_all: {e}")
+                bot.send_message(user_id, "❌ Error during cleanup process")
+                
+        elif call.data == "cancel_delete":
+            bot.send_message(user_id, "❌ Operation cancelled.")
 
         elif call.data == "add_channel":
             markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1847,11 +1876,11 @@ Please help me with payment details and activation.
 🗑 **Message Cleanup Completed!**
 
 📊 **Results:**
-• ✅ Messages Deleted: `{deleted_count}`
-• ❌ Failed Deletions: `{failed_count}`
-• 📋 History Cleared: ✅
+• ✅ **Messages Deleted:** `{deleted_count}`
+• ❌ **Failed Deletions:** `{failed_count}`
+• 📋 **History Cleared:** ✅
 
-✅ All broadcast messages have been removed from channels.
+✅ **All broadcast messages have been removed from channels.**
                 """
                 bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
                 
@@ -1937,12 +1966,12 @@ Please help me with payment details and activation.
 🧹 **Complete Cleanup Finished!**
 
 📊 **Results:**
-• ✅ Messages Deleted: `{deleted_count}`
-• ❌ Failed Deletions: `{failed_count}`
-• ⏹ Reposts Stopped: ✅
-• 📋 History Cleared: ✅
+• ✅ **Messages Deleted:** `{deleted_count}`
+• ❌ **Failed Deletions:** `{failed_count}`
+• ⏹ **Reposts Stopped:** ✅
+• 📋 **History Cleared:** ✅
 
-✅ Complete cleanup completed successfully!
+✅ **Complete cleanup completed successfully!**
                 """
                 bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
                 
@@ -2034,6 +2063,38 @@ def handle_message(message):
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
+            return
+
+        # Handle custom repost time input
+        if state and state.get("step") == "ask_repost_time":
+            try:
+                minutes = int(message.text.strip())
+                if minutes < 1:
+                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
+                    return
+                if minutes > 43200:  # 30 days
+                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum repost time is 30 days (43200 minutes).")
+                    return
+                    
+                state["repost_time"] = minutes
+                
+                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
+                bot.send_message(
+                    user_id,
+                    f"✅ **Auto repost set to {time_display}**\n\n🗑 Enable Auto Delete?",
+                    parse_mode="Markdown"
+                )
+                
+                # Ask for auto delete
+                state["step"] = "ask_autodelete"
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
+                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
+                )
+                bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
+            except ValueError:
+                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
             return
 
         # Handle custom auto delete time input
