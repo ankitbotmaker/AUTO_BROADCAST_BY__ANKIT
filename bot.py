@@ -406,10 +406,10 @@ broadcast_bot = AdvancedBroadcastBot()
 def extract_telegram_links(text: str) -> List[str]:
     """Extract Telegram channel/group links from text"""
     patterns = [
-        r'https?://t\.me/([a-zA-Z0-9_]+)',
-        r'@([a-zA-Z0-9_]+)',
-        r't\.me/([a-zA-Z0-9_]+)',
-        r'https?://telegram\.me/([a-zA-Z0-9_]+)'
+        r'(https?://t\.me/[a-zA-Z0-9_]+)',
+        r'(@[a-zA-Z0-9_]+)',
+        r'(t\.me/[a-zA-Z0-9_]+)',
+        r'(https?://telegram\.me/[a-zA-Z0-9_]+)'
     ]
     
     links = []
@@ -432,9 +432,15 @@ def resolve_telegram_link(link: str) -> Optional[int]:
             username = link.split('/')[-1]
             chat_info = bot.get_chat(f"@{username}")
             return chat_info.id
+        elif link.startswith('https://telegram.me/'):
+            username = link.split('/')[-1]
+            chat_info = bot.get_chat(f"@{username}")
+            return chat_info.id
         else:
-            # Try as username
-            chat_info = bot.get_chat(f"@{link}")
+            # Try as username (add @ if not present)
+            if not link.startswith('@'):
+                link = f"@{link}"
+            chat_info = bot.get_chat(link)
             return chat_info.id
     except Exception as e:
         logger.error(f"Error resolving link {link}: {e}")
@@ -2187,6 +2193,12 @@ def handle_message(message):
             if added_channels:
                 channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
                 repost_message += f"\n\n✅ **Auto-added {len(added_channels)} channels:**\n{channel_list}"
+                
+                # Show original links that were detected
+                original_links = extract_telegram_links(original_text)
+                if original_links:
+                    links_text = "\n".join([f"🔗 `{link}`" for link in original_links])
+                    repost_message += f"\n\n🔍 **Detected Links:**\n{links_text}"
                 
                 # Show what text will be broadcasted
                 if cleaned_text and cleaned_text != original_text:
