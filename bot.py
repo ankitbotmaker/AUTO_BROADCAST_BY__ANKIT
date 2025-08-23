@@ -2252,48 +2252,46 @@ if __name__ == "__main__":
     
     try:
         if os.environ.get('PORT'):
-            # Heroku deployment - use webhook
-            logger.info("🌐 Starting on Heroku with webhook...")
+            # Heroku deployment - use polling (more reliable)
+            logger.info("🌐 Starting on Heroku with polling...")
             
-            # Get app name from environment or use default
-            app_name = os.environ.get('HEROKU_APP_NAME', 'broadcast725')
-            webhook_url = f"https://{app_name}.herokuapp.com/webhook"
-            
+            # Remove any existing webhook
             try:
                 bot.remove_webhook()
-                bot.set_webhook(url=webhook_url)
-                logger.info(f"✅ Webhook set to: {webhook_url}")
+                logger.info("✅ Webhook removed, using polling")
             except Exception as e:
-                logger.error(f"❌ Failed to set webhook: {e}")
+                logger.error(f"❌ Failed to remove webhook: {e}")
             
-            # Start Flask server for webhook
-            from flask import Flask, request
+            # Start Flask server for health check
+            from flask import Flask
             
             app = Flask(__name__)
             
-            @app.route('/webhook', methods=['POST'])
-            def webhook():
-                try:
-                    if request.method == 'POST':
-                        update = types.Update.de_json(request.stream.read().decode('utf-8'))
-                        bot.process_new_updates([update])
-                        return 'ok', 200
-                    else:
-                        return 'Method not allowed', 405
-                except Exception as e:
-                    logger.error(f"Webhook error: {e}")
-                    return 'error', 500
-            
-            @app.route('/webhook', methods=['GET'])
-            def webhook_info():
-                return f'Webhook endpoint for {app_name} bot', 200
-            
             @app.route('/')
             def home():
-                return '🚀 Advanced Broadcast Bot is running!'
+                return '🚀 Advanced Broadcast Bot is running on Heroku!'
             
-            # Run Flask app for webhook
-            app.run(host='0.0.0.0', port=port, threaded=True)
+            @app.route('/health')
+            def health():
+                return '✅ Bot is healthy and running!', 200
+            
+            # Start Flask in background thread
+            import threading
+            def run_flask():
+                app.run(host='0.0.0.0', port=port, threaded=True)
+            
+            flask_thread = threading.Thread(target=run_flask, daemon=True)
+            flask_thread.start()
+            
+            # Start bot polling
+            logger.info("🔄 Starting bot polling...")
+            try:
+                bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
+            except Exception as e:
+                logger.error(f"❌ Polling error: {e}")
+                # Retry polling
+                time.sleep(5)
+                bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
             
         else:
             # Local development - use polling
