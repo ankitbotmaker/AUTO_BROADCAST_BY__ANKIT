@@ -1196,42 +1196,89 @@ def callback_handler(call):
             
         elif call.data == "instant_stop_all":
             logger.info(f"Instant Stop All button pressed by user {user_id}")
-            # Instant stop all reposts and delete all messages
-            if user_id in bot_state.active_reposts:
-                bot_state.active_reposts[user_id]["stop"] = True
-                del bot_state.active_reposts[user_id]
-            
-            # Get all broadcast messages
-            broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
             
             # Send instant status
             status_msg = bot.send_message(
                 user_id,
                 f"🛑 **Instant Stop All Activated!**\n\n"
                 f"⏹ Stopping all reposts...\n"
-                f"🗑 Deleting {len(broadcast_messages)} messages...\n"
+                f"🗑 Preparing to delete messages...\n"
                 f"⚡ Processing at maximum speed...",
                 parse_mode="Markdown"
             )
             
-            # Fast deletion without progress updates
+            # Stop all active reposts
+            if user_id in bot_state.active_reposts:
+                bot_state.active_reposts[user_id]["stop"] = True
+                del bot_state.active_reposts[user_id]
+            
+            # Get all broadcast messages from database
+            broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 10000)
+            
+            # Update status
+            bot.edit_message_text(
+                f"🛑 **Instant Stop All - IN PROGRESS**\n\n"
+                f"⏹ **Reposts Stopped:** ✅\n"
+                f"🗑 **Messages Found:** `{len(broadcast_messages)}`\n"
+                f"⚡ **Deleting messages...**\n"
+                f"⏳ Please wait...",
+                user_id, status_msg.message_id, parse_mode="Markdown"
+            )
+            
+            # Enhanced deletion with better error handling
             deleted_count = 0
             failed_count = 0
+            failed_channels = []
             
-            for msg in broadcast_messages:
-                try:
-                    result = bot.delete_message(msg['channel_id'], msg['message_id'])
-                    if result:
-                        deleted_count += 1
-                    else:
+            # Process messages in batches for better performance
+            batch_size = 50
+            for i in range(0, len(broadcast_messages), batch_size):
+                batch = broadcast_messages[i:i + batch_size]
+                
+                for msg in batch:
+                    try:
+                        channel_id = msg.get('channel_id')
+                        message_id = msg.get('message_id')
+                        
+                        if channel_id and message_id:
+                            result = bot.delete_message(channel_id, message_id)
+                            if result:
+                                deleted_count += 1
+                            else:
+                                failed_count += 1
+                                failed_channels.append(str(channel_id))
+                        else:
+                            failed_count += 1
+                    except Exception as e:
                         failed_count += 1
-                except:
-                    failed_count += 1
+                        failed_channels.append(str(msg.get('channel_id', 'unknown')))
+                        logger.error(f"Failed to delete message {msg.get('message_id')} from {msg.get('channel_id')}: {e}")
+                
+                # Update progress every batch
+                if i + batch_size < len(broadcast_messages):
+                    progress = min(100, int((i + batch_size) / len(broadcast_messages) * 100))
+                    bot.edit_message_text(
+                        f"🛑 **Instant Stop All - IN PROGRESS**\n\n"
+                        f"⏹ **Reposts Stopped:** ✅\n"
+                        f"🗑 **Progress:** `{progress}%`\n"
+                        f"✅ **Deleted:** `{deleted_count}`\n"
+                        f"❌ **Failed:** `{failed_count}`\n"
+                        f"⚡ **Processing...**",
+                        user_id, status_msg.message_id, parse_mode="Markdown"
+                    )
             
-            # Clear broadcast history
+            # Clear broadcast history from database
             broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
             
-            # Final result
+            # Clear any active broadcasts
+            if user_id in bot_state.active_broadcasts:
+                del bot_state.active_broadcasts[user_id]
+            
+            # Clear broadcast state
+            if user_id in bot_state.broadcast_state:
+                del bot_state.broadcast_state[user_id]
+            
+            # Final result with detailed information
             result_text = f"""
 🛑 **Instant Stop All - COMPLETED!**
 
@@ -1244,6 +1291,13 @@ def callback_handler(call):
 
 🎯 **All broadcasts stopped and deleted instantly!**
             """
+            
+            if failed_count > 0:
+                failed_list = ', '.join(set(failed_channels[:10]))
+                if len(set(failed_channels)) > 10:
+                    failed_list += f" and {len(set(failed_channels)) - 10} more"
+                result_text += f"\n\n❌ **Failed Channels:**\n`{failed_list}`"
+            
             bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
             # Auto-delete instant stop result after 8 seconds
             threading.Timer(8, lambda: delete_message_safe(user_id, status_msg.message_id)).start()
@@ -1359,6 +1413,16 @@ def callback_handler(call):
 
             
         elif call.data == "confirm_delete_all":
+            # Send status message
+            status_msg = bot.send_message(
+                user_id,
+                f"🧹 **Broadcast Cleanup Started!**\n\n"
+                f"⏹ Stopping all reposts...\n"
+                f"🗑 Preparing to delete messages...\n"
+                f"⚡ Processing...",
+                parse_mode="Markdown"
+            )
+            
             # Stop all reposts
             if user_id in bot_state.active_reposts:
                 bot_state.active_reposts[user_id]["stop"] = True
@@ -1367,24 +1431,69 @@ def callback_handler(call):
             # Delete all broadcast messages
             deleted_count = 0
             failed_count = 0
+            failed_channels = []
             
             try:
                 # Get all broadcast messages for this user
-                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
+                broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 10000)
                 
-                for msg in broadcast_messages:
-                    try:
-                        result = bot.delete_message(msg['channel_id'], msg['message_id'])
-                        if result:
-                            deleted_count += 1
-                        else:
+                # Update status
+                bot.edit_message_text(
+                    f"🧹 **Broadcast Cleanup - IN PROGRESS**\n\n"
+                    f"⏹ **Reposts Stopped:** ✅\n"
+                    f"🗑 **Messages Found:** `{len(broadcast_messages)}`\n"
+                    f"⚡ **Deleting messages...**\n"
+                    f"⏳ Please wait...",
+                    user_id, status_msg.message_id, parse_mode="Markdown"
+                )
+                
+                # Process messages in batches
+                batch_size = 50
+                for i in range(0, len(broadcast_messages), batch_size):
+                    batch = broadcast_messages[i:i + batch_size]
+                    
+                    for msg in batch:
+                        try:
+                            channel_id = msg.get('channel_id')
+                            message_id = msg.get('message_id')
+                            
+                            if channel_id and message_id:
+                                result = bot.delete_message(channel_id, message_id)
+                                if result:
+                                    deleted_count += 1
+                                else:
+                                    failed_count += 1
+                                    failed_channels.append(str(channel_id))
+                            else:
+                                failed_count += 1
+                        except Exception as e:
                             failed_count += 1
-                    except Exception as e:
-                        failed_count += 1
-                        logger.error(f"Failed to delete message {msg['message_id']} from {msg['channel_id']}: {e}")
+                            failed_channels.append(str(msg.get('channel_id', 'unknown')))
+                            logger.error(f"Failed to delete message {msg.get('message_id')} from {msg.get('channel_id')}: {e}")
+                    
+                    # Update progress every batch
+                    if i + batch_size < len(broadcast_messages):
+                        progress = min(100, int((i + batch_size) / len(broadcast_messages) * 100))
+                        bot.edit_message_text(
+                            f"🧹 **Broadcast Cleanup - IN PROGRESS**\n\n"
+                            f"⏹ **Reposts Stopped:** ✅\n"
+                            f"🗑 **Progress:** `{progress}%`\n"
+                            f"✅ **Deleted:** `{deleted_count}`\n"
+                            f"❌ **Failed:** `{failed_count}`\n"
+                            f"⚡ **Processing...**",
+                            user_id, status_msg.message_id, parse_mode="Markdown"
+                        )
                 
                 # Clear broadcast history from database
                 broadcast_bot.broadcast_messages_col.delete_many({"user_id": user_id})
+                
+                # Clear any active broadcasts
+                if user_id in bot_state.active_broadcasts:
+                    del bot_state.active_broadcasts[user_id]
+                
+                # Clear broadcast state
+                if user_id in bot_state.broadcast_state:
+                    del bot_state.broadcast_state[user_id]
                 
                 result_text = f"""
 🗑 **Broadcast Cleanup Completed!**
@@ -1397,14 +1506,20 @@ def callback_handler(call):
 
 ✅ **All broadcast messages have been removed from channels.**
                 """
-                sent_msg = bot.send_message(user_id, result_text, parse_mode="Markdown")
+                
+                if failed_count > 0:
+                    failed_list = ', '.join(set(failed_channels[:10]))
+                    if len(set(failed_channels)) > 10:
+                        failed_list += f" and {len(set(failed_channels)) - 10} more"
+                    result_text += f"\n\n❌ **Failed Channels:**\n`{failed_list}`"
+                
+                bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
                 # Auto-delete cleanup result after 8 seconds
-                if sent_msg:
-                    threading.Timer(8, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+                threading.Timer(8, lambda: delete_message_safe(user_id, status_msg.message_id)).start()
                 
             except Exception as e:
                 logger.error(f"Error in confirm_delete_all: {e}")
-                bot.send_message(user_id, "❌ Error during cleanup process")
+                bot.edit_message_text("❌ **Error during cleanup process**", user_id, status_msg.message_id, parse_mode="Markdown")
                 
         elif call.data == "cancel_delete":
             bot.send_message(user_id, "❌ Operation cancelled.")
