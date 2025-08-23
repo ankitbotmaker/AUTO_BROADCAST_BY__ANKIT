@@ -1,7 +1,10 @@
 # Bot Configuration - Advanced Broadcast System
-BOT_TOKEN = "8363735141:AAFKSuC-Ptjm0xKSJUJdxrkaex2CmQZ34vI"
-MONGO_URL = "mongodb+srv://rowojo2049:bga4FhmFXj2GTM5B@cluster0.ggmw5h8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-ADMIN_IDS = "7792539085"
+import os
+
+# Get from environment variables (for Heroku) or use defaults
+BOT_TOKEN = os.environ.get('BOT_TOKEN', "8363735141:AAFKSuC-Ptjm0xKSJUJdxrkaex2CmQZ34vI")
+MONGO_URL = os.environ.get('MONGO_URL', "mongodb+srv://rowojo2049:bga4FhmFXj2GTM5B@cluster0.ggmw5h8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+ADMIN_IDS = os.environ.get('ADMIN_IDS', "7792539085")
 
 # Advanced Features Config
 API_ID = "22746239"

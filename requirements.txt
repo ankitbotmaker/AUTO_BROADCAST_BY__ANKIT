@@ -6,3 +6,4 @@ schedule==1.2.0
 flask==3.0.0
 gunicorn==21.2.0
 pillow==10.2.0
+dnspython==2.4.2

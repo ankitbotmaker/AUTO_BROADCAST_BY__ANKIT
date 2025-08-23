@@ -2247,8 +2247,51 @@ if __name__ == "__main__":
     # Update analytics on startup
     broadcast_bot.update_analytics("active_users", 0)
     
+    # Check if running on Heroku
+    port = int(os.environ.get('PORT', 5000))
+    
     try:
-        bot.infinity_polling(none_stop=True, timeout=60)
+        if os.environ.get('PORT'):
+            # Heroku deployment - use webhook
+            logger.info("🌐 Starting on Heroku with webhook...")
+            
+            # Get app name from environment or use default
+            app_name = os.environ.get('HEROKU_APP_NAME', 'your-app-name')
+            webhook_url = f"https://{app_name}.herokuapp.com/webhook"
+            
+            try:
+                bot.remove_webhook()
+                bot.set_webhook(url=webhook_url)
+                logger.info(f"✅ Webhook set to: {webhook_url}")
+            except Exception as e:
+                logger.error(f"❌ Failed to set webhook: {e}")
+            
+            # Start Flask server for webhook
+            from flask import Flask, request
+            
+            app = Flask(__name__)
+            
+            @app.route('/webhook', methods=['POST'])
+            def webhook():
+                try:
+                    update = types.Update.de_json(request.stream.read().decode('utf-8'))
+                    bot.process_new_updates([update])
+                    return 'ok', 200
+                except Exception as e:
+                    logger.error(f"Webhook error: {e}")
+                    return 'error', 500
+            
+            @app.route('/')
+            def home():
+                return '🚀 Advanced Broadcast Bot is running!'
+            
+            app.run(host='0.0.0.0', port=port)
+            
+        else:
+            # Local development - use polling
+            logger.info("🏠 Starting locally with polling...")
+            bot.infinity_polling(none_stop=True, timeout=60)
+            
     except Exception as e:
         logger.error(f"❌ Bot crashed: {e}")
         # Auto-restart logic could be added here

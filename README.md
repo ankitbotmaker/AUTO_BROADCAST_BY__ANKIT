@@ -164,10 +164,43 @@ python bot.py
 
 ### 🌐 Heroku Deployment
 
-1. **Create App**: Create new Heroku app
-2. **Add Config Vars**: Set environment variables
-3. **Deploy**: Connect GitHub repository
-4. **Scale**: Set worker dyno to 1
+#### Method 1: One-Click Deploy
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/ankitbotmaker/ankitbb)
+
+#### Method 2: Manual Deployment
+
+1. **Create Heroku App**:
+   ```bash
+   heroku create your-app-name
+   ```
+
+2. **Set Environment Variables**:
+   ```bash
+   heroku config:set BOT_TOKEN="your_bot_token"
+   heroku config:set MONGO_URL="your_mongodb_url"
+   heroku config:set ADMIN_IDS="your_admin_id"
+   ```
+
+3. **Deploy from GitHub**:
+   ```bash
+   git push heroku main
+   ```
+
+4. **Scale Worker Dyno**:
+   ```bash
+   heroku ps:scale worker=1
+   ```
+
+5. **Check Logs**:
+   ```bash
+   heroku logs --tail
+   ```
+
+#### ⚠️ Important Notes:
+- **Worker Dyno**: Bot runs on worker dyno, not web dyno
+- **Environment Variables**: Must be set in Heroku dashboard
+- **MongoDB**: Use MongoDB Atlas for cloud database
+- **Webhook**: Automatically configured for Heroku
 
 ### 🐳 Docker Deployment
 

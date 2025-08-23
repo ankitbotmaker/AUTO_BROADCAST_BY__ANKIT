@@ -1,0 +1,32 @@
+{
+  "name": "Advanced Telegram Broadcast Bot",
+  "description": "Advanced Telegram bot with auto repost, auto delete, and multi-channel management",
+  "repository": "https://github.com/ankitbotmaker/ankitbb",
+  "logo": "https://img.icons8.com/color/96/000000/telegram-app.png",
+  "keywords": ["python", "telegram", "bot", "broadcast", "automation"],
+  "env": {
+    "BOT_TOKEN": {
+      "description": "Your Telegram Bot Token",
+      "value": "8363735141:AAFKSuC-Ptjm0xKSJUJdxrkaex2CmQZ34vI"
+    },
+    "MONGO_URL": {
+      "description": "Your MongoDB Connection URL",
+      "value": "mongodb+srv://rowojo2049:bga4FhmFXj2GTM5B@cluster0.ggmw5h8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+    },
+    "ADMIN_IDS": {
+      "description": "Admin User IDs (comma separated)",
+      "value": "7792539085"
+    }
+  },
+  "formation": {
+    "worker": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "buildpacks": [
+    {
+      "url": "heroku/python"
+    }
+  ]
+}
