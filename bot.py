@@ -2256,7 +2256,7 @@ if __name__ == "__main__":
             logger.info("🌐 Starting on Heroku with webhook...")
             
             # Get app name from environment or use default
-            app_name = os.environ.get('HEROKU_APP_NAME', 'your-app-name')
+            app_name = os.environ.get('HEROKU_APP_NAME', 'broadcast725')
             webhook_url = f"https://{app_name}.herokuapp.com/webhook"
             
             try:
@@ -2274,18 +2274,26 @@ if __name__ == "__main__":
             @app.route('/webhook', methods=['POST'])
             def webhook():
                 try:
-                    update = types.Update.de_json(request.stream.read().decode('utf-8'))
-                    bot.process_new_updates([update])
-                    return 'ok', 200
+                    if request.method == 'POST':
+                        update = types.Update.de_json(request.stream.read().decode('utf-8'))
+                        bot.process_new_updates([update])
+                        return 'ok', 200
+                    else:
+                        return 'Method not allowed', 405
                 except Exception as e:
                     logger.error(f"Webhook error: {e}")
                     return 'error', 500
+            
+            @app.route('/webhook', methods=['GET'])
+            def webhook_info():
+                return f'Webhook endpoint for {app_name} bot', 200
             
             @app.route('/')
             def home():
                 return '🚀 Advanced Broadcast Bot is running!'
             
-            app.run(host='0.0.0.0', port=port)
+            # Run Flask app for webhook
+            app.run(host='0.0.0.0', port=port, threaded=True)
             
         else:
             # Local development - use polling

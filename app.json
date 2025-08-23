@@ -2,6 +2,7 @@
   "name": "Advanced Telegram Broadcast Bot",
   "description": "Advanced Telegram bot with auto repost, auto delete, and multi-channel management",
   "repository": "https://github.com/ankitbotmaker/ankitbb",
+  "name": "broadcast725",
   "logo": "https://img.icons8.com/color/96/000000/telegram-app.png",
   "keywords": ["python", "telegram", "bot", "broadcast", "automation"],
   "env": {
