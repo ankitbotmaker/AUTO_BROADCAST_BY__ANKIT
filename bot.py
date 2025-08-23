@@ -631,12 +631,17 @@ def finish_advanced_broadcast(chat_id: int):
 
         try:
             bot.edit_message_text(result_text, chat_id, status_msg.message_id, parse_mode="Markdown")
+            # Auto-delete the result message after 10 seconds
+            threading.Timer(10, lambda: delete_message_safe(chat_id, status_msg.message_id)).start()
         except:
-            bot.send_message(chat_id, result_text, parse_mode="Markdown")
+            sent_msg = bot.send_message(chat_id, result_text, parse_mode="Markdown")
+            # Auto-delete the result message after 10 seconds
+            if sent_msg:
+                threading.Timer(10, lambda: delete_message_safe(chat_id, sent_msg.message_id)).start()
 
         # Start auto repost if enabled
         if repost_time:
-            bot.send_message(
+            repost_msg = bot.send_message(
                 chat_id,
                 f"🔄 **Auto Repost Started!**\n\n"
                 f"⏱ **Interval:** `{repost_time} minutes`\n"
@@ -645,6 +650,9 @@ def finish_advanced_broadcast(chat_id: int):
                 f"Use **⏹ Stop Repost** button to cancel.",
                 parse_mode="Markdown"
             )
+            # Auto-delete repost message after 15 seconds
+            if repost_msg:
+                threading.Timer(15, lambda: delete_message_safe(chat_id, repost_msg.message_id)).start()
             
             stop_flag = {"stop": False}
             bot_state.active_reposts[chat_id] = stop_flag
@@ -664,6 +672,32 @@ def finish_advanced_broadcast(chat_id: int):
         bot_state.active_broadcasts.pop(chat_id, None)
 
 
+
+def send_and_delete(message, text, parse_mode="Markdown", reply_markup=None, delete_after=5):
+    """Send message and auto-delete after specified seconds"""
+    try:
+        sent_msg = bot.send_message(
+            message.chat.id,
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup
+        )
+        
+        # Auto-delete after specified time
+        if delete_after > 0:
+            threading.Timer(delete_after, lambda: delete_message_safe(message.chat.id, sent_msg.message_id)).start()
+        
+        return sent_msg
+    except Exception as e:
+        logger.error(f"Error in send_and_delete: {e}")
+        return None
+
+def delete_message_safe(chat_id: int, message_id: int):
+    """Safely delete message with error handling"""
+    try:
+        bot.delete_message(chat_id, message_id)
+    except Exception as e:
+        logger.error(f"Error deleting message {message_id} from {chat_id}: {e}")
 
 def advanced_auto_delete(chat_id: int, msg_id: int, delete_time: int):
     """Advanced auto delete with retry and logging"""
@@ -1074,7 +1108,7 @@ Choose an option:
     welcome_text = f"""
 🎉 **Advanced Broadcast Bot** 🚀
 
-**👋 Welcome, {message.from_user.first_name}!**
+> **👋 Welcome, {message.from_user.first_name}!**
 
 **📊 Your Dashboard:**
 • 📢 **Channels:** `{user_analytics.get('total_channels', 0)}`
@@ -1136,7 +1170,10 @@ def callback_handler(call):
         elif call.data == "broadcast":
             logger.info(f"Broadcast button pressed by user {user_id}")
             bot_state.broadcast_state[user_id] = {"step": "waiting_msg"}
-            bot.send_message(user_id, "📢 Send your broadcast message:")
+            sent_msg = bot.send_message(user_id, "📢 Send your broadcast message:")
+            # Auto-delete broadcast prompt after 30 seconds
+            if sent_msg:
+                threading.Timer(30, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
 
         elif call.data == "stop_and_delete":
             logger.info(f"Stop and Delete button pressed by user {user_id}")
@@ -1208,6 +1245,8 @@ def callback_handler(call):
 🎯 **All broadcasts stopped and deleted instantly!**
             """
             bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+            # Auto-delete instant stop result after 8 seconds
+            threading.Timer(8, lambda: delete_message_safe(user_id, status_msg.message_id)).start()
 
         elif call.data == "repost_yes":
             state["step"] = "ask_repost_time"
@@ -1219,7 +1258,10 @@ def callback_handler(call):
                 types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60"),
                 types.InlineKeyboardButton("⏱ Custom Time", callback_data="repost_custom"),
             )
-            bot.send_message(user_id, "⏱ Choose repost interval:", reply_markup=markup)
+            sent_msg = bot.send_message(user_id, "⏱ Choose repost interval:", reply_markup=markup)
+            # Auto-delete repost time selection after 60 seconds
+            if sent_msg:
+                threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             
         elif call.data == "repost_no":
             state["repost_time"] = None
@@ -1229,7 +1271,10 @@ def callback_handler(call):
                 types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
                 types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
             )
-            bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
+            sent_msg = bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
+            # Auto-delete auto delete question after 60 seconds
+            if sent_msg:
+                threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             
         elif call.data == "delete_yes":
             state["step"] = "ask_autodelete_time"
@@ -1246,7 +1291,10 @@ def callback_handler(call):
                 types.InlineKeyboardButton("🗑 24h", callback_data="delete_1440"),
                 types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
             )
-            bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
+            sent_msg = bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
+            # Auto-delete delete time selection after 60 seconds
+            if sent_msg:
+                threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             
         elif call.data == "delete_no":
             state["delete_time"] = None
@@ -1349,7 +1397,10 @@ def callback_handler(call):
 
 ✅ **All broadcast messages have been removed from channels.**
                 """
-                bot.send_message(user_id, result_text, parse_mode="Markdown")
+                sent_msg = bot.send_message(user_id, result_text, parse_mode="Markdown")
+                # Auto-delete cleanup result after 8 seconds
+                if sent_msg:
+                    threading.Timer(8, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
                 
             except Exception as e:
                 logger.error(f"Error in confirm_delete_all: {e}")
@@ -1946,13 +1997,16 @@ def handle_message(message):
                 types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
             )
             
-            bot.send_message(
+            sent_msg = bot.send_message(
                 user_id, 
                 "🔄 **Would you like to set auto repost?**\n\n"
                 "Your message will be automatically reposted at regular intervals:",
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
+            # Auto-delete repost question after 60 seconds
+            if sent_msg:
+                threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             return
 
         # Handle custom repost time input
