@@ -2255,12 +2255,17 @@ if __name__ == "__main__":
             # Heroku deployment - use polling (more reliable)
             logger.info("🌐 Starting on Heroku with polling...")
             
-            # Remove any existing webhook
-            try:
-                bot.remove_webhook()
-                logger.info("✅ Webhook removed, using polling")
-            except Exception as e:
-                logger.error(f"❌ Failed to remove webhook: {e}")
+            # Force remove webhook multiple times to ensure it's gone
+            for attempt in range(3):
+                try:
+                    bot.remove_webhook()
+                    logger.info(f"✅ Webhook removal attempt {attempt + 1} successful")
+                    time.sleep(2)  # Wait between attempts
+                except Exception as e:
+                    logger.warning(f"⚠️ Webhook removal attempt {attempt + 1} failed: {e}")
+                    time.sleep(2)
+            
+            logger.info("🔄 Starting polling after webhook removal...")
             
             # Start Flask server for health check
             from flask import Flask
@@ -2296,6 +2301,14 @@ if __name__ == "__main__":
         else:
             # Local development - use polling
             logger.info("🏠 Starting locally with polling...")
+            
+            # Remove any existing webhook for local development
+            try:
+                bot.remove_webhook()
+                logger.info("✅ Webhook removed for local development")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to remove webhook locally: {e}")
+            
             bot.infinity_polling(none_stop=True, timeout=60)
             
     except Exception as e:
