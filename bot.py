@@ -663,79 +663,7 @@ def finish_advanced_broadcast(chat_id: int):
         # Clear active broadcast on error
         bot_state.active_broadcasts.pop(chat_id, None)
 
-def apply_message_formatting(user_id: int, format_type: str):
-    """Apply formatting to message and show preview"""
-    try:
-        state = bot_state.broadcast_state.get(user_id)
-        if not state or "message" not in state:
-            bot.send_message(user_id, "❌ No message found to format!")
-            return
-            
-        message = state["message"]
-        original_text = message.text or message.caption or ""
-        
-        # Apply formatting based on type
-        if format_type == "format_plain":
-            formatted_text = original_text
-            format_name = "Plain Text"
-        elif format_type == "format_bold":
-            formatted_text = f"**{original_text}**"
-            format_name = "Bold Text"
-        elif format_type == "format_italic":
-            formatted_text = f"*{original_text}*"
-            format_name = "Italic Text"
-        elif format_type == "format_links":
-            # Add some example links
-            formatted_text = f"{original_text}\n\n🔗 **Useful Links:**\n• [Telegram](https://t.me/)\n• [Support](https://t.me/)\n• [Channel](https://t.me/)"
-            format_name = "With Links"
-        elif format_type == "format_code":
-            formatted_text = f"```\n{original_text}\n```"
-            format_name = "Code Format"
-        elif format_type == "format_quote":
-            formatted_text = f"> {original_text}\n\n— *Quote*"
-            format_name = "Quote Style"
-        elif format_type == "format_sticky":
-            formatted_text = f"📌 **IMPORTANT**\n\n{original_text}\n\n📌 *Pinned Message*"
-            format_name = "Sticky Note"
-        elif format_type == "format_highlight":
-            formatted_text = f"⚡ **HIGHLIGHT** ⚡\n\n{original_text}\n\n🎯 *Highlighted Content*"
-            format_name = "Highlight"
-        else:
-            formatted_text = original_text
-            format_name = "Default"
-        
-        # Store formatted text
-        state["formatted_text"] = formatted_text
-        state["format_type"] = format_type
-        
-        # Show preview and go directly to repost question
-        preview_text = f"""
-🎨 **Formatting Applied: {format_name}**
 
-📝 **Preview:**
-**{formatted_text[:200]}{'...' if len(formatted_text) > 200 else ''}**
-
-✅ **Ready to broadcast!**
-        """
-        
-        bot.send_message(
-            user_id,
-            preview_text,
-            parse_mode="Markdown"
-        )
-        
-        # Go directly to repost question
-        state["step"] = "ask_repost"
-        markup = types.InlineKeyboardMarkup()
-        markup.add(
-            types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
-            types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
-        )
-        bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
-        
-    except Exception as e:
-        logger.error(f"Error applying formatting: {e}")
-        bot.send_message(user_id, f"❌ Error applying formatting: {e}")
 
 def advanced_auto_delete(chat_id: int, msg_id: int, delete_time: int):
     """Advanced auto delete with retry and logging"""
@@ -1158,7 +1086,6 @@ Choose an option:
 • ⚡ **Auto Repost & Delete**
 • ⏰ **Scheduled Broadcasts**  
 • 📊 **Real-time Analytics**
-• 🎨 **Multi-media Support**
 • 📋 **Bulk Operations**
 • 🛑 **Instant Stop All**
 
@@ -1381,33 +1308,7 @@ def callback_handler(call):
             else:
                 bot.send_message(user_id, "⚠️ No active auto reposts found.")
             
-        # Formatting handlers
-        elif call.data.startswith("format_"):
-            if call.data == "format_skip":
-                # Skip formatting and go to repost question
-                state["step"] = "ask_repost"
-                markup = types.InlineKeyboardMarkup()
-                markup.add(
-                    types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
-                    types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
-                )
-                bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
-            else:
-                # Apply formatting
-                apply_message_formatting(user_id, call.data)
-                
-        elif call.data == "format_confirm":
-            # This is now handled directly in apply_message_formatting
-            pass
-            
-        elif call.data == "format_retry":
-            # This is now handled directly in apply_message_formatting
-            pass
-            
-        elif call.data == "format_cancel":
-            # Cancel formatting and clear state
-            bot_state.broadcast_state.pop(user_id, None)
-            bot.send_message(user_id, "❌ Formatting cancelled. Send /start to try again.")
+
             
         elif call.data == "confirm_delete_all":
             # Stop all reposts
@@ -2031,35 +1932,24 @@ def handle_message(message):
 
         if state and state.get("step") == "waiting_msg":
             state["message"] = message
-            state["step"] = "ask_formatting"
+            state["step"] = "ask_repost"
             
-            # Show formatting options
+            # Store original text as formatted text
+            original_text = message.text or message.caption or ""
+            state["formatted_text"] = original_text
+            state["format_type"] = "plain"
+            
+            # Go directly to repost question
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("📝 Plain Text", callback_data="format_plain"),
-                types.InlineKeyboardButton("🎨 Bold Text", callback_data="format_bold"),
-                types.InlineKeyboardButton("📋 Italic Text", callback_data="format_italic"),
-                types.InlineKeyboardButton("🔗 With Links", callback_data="format_links"),
-                types.InlineKeyboardButton("📊 Code Format", callback_data="format_code"),
-                types.InlineKeyboardButton("💬 Quote Style", callback_data="format_quote"),
-                types.InlineKeyboardButton("📌 Sticky Note", callback_data="format_sticky"),
-                types.InlineKeyboardButton("🎯 Highlight", callback_data="format_highlight"),
-                types.InlineKeyboardButton("🚀 Skip Formatting", callback_data="format_skip")
+                types.InlineKeyboardButton("🔄 Yes, Auto Repost", callback_data="repost_yes"),
+                types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
             )
             
             bot.send_message(
                 user_id, 
-                "🎨 **Choose Message Formatting:**\n\n"
-                "Select how you want your message to appear:\n\n"
-                "• 📝 **Plain Text** - Simple text\n"
-                "• 🎨 **Bold Text** - **Bold formatting**\n"
-                "• 📋 **Italic Text** - *Italic formatting*\n"
-                "• 🔗 **With Links** - Clickable links\n"
-                "• 📊 **Code Format** - `Code blocks`\n"
-                "• 💬 **Quote Style** - > Quoted text\n"
-                "• 📌 **Sticky Note** - 📌 Pinned style\n"
-                "• 🎯 **Highlight** - ⚡ Highlighted\n"
-                "• 🚀 **Skip Formatting** - Continue without changes",
+                "🔄 **Would you like to set auto repost?**\n\n"
+                "Your message will be automatically reposted at regular intervals:",
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
