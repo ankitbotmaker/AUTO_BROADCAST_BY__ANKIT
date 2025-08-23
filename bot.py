@@ -11,10 +11,11 @@ import logging
 import threading
 import schedule
 import json
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import telebot
 from telebot import types
@@ -74,6 +75,9 @@ if isinstance(ADMIN_IDS, str):
 else:
     ADMIN_IDS = []
 
+# Thread pool for concurrent broadcasts
+broadcast_executor = ThreadPoolExecutor(max_workers=5)  # Handle 5 concurrent broadcasts
+
 class AdvancedBotState:
     def __init__(self):
         self.broadcast_state = {}
@@ -81,6 +85,7 @@ class AdvancedBotState:
         self.scheduled_tasks = {}
         self.analytics_cache = {}
         self.user_sessions = {}
+        self.active_broadcasts = {}  # Track active broadcasts
 
 bot_state = AdvancedBotState()
 
@@ -101,372 +106,586 @@ class AdvancedBroadcastBot:
 
     def init_analytics(self):
         """Initialize analytics collection"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        analytics = self.analytics_col.find_one({"date": today})
-        if not analytics:
-            self.analytics_col.insert_one({
-                "date": today,
-                "total_broadcasts": 0,
-                "total_messages_sent": 0,
-                "active_users": 0,
-                "new_channels_added": 0,
-                "auto_reposts": 0,
-                "auto_deletes": 0,
-                "failed_broadcasts": 0
-            })
+        try:
+            analytics_col.update_one(
+                {"_id": "stats"},
+                {
+                    "$setOnInsert": {
+                        "total_broadcasts": 0,
+                        "total_messages_sent": 0,
+                        "failed_broadcasts": 0,
+                        "active_users": 0,
+                        "premium_users": 0,
+                        "total_channels": 0,
+                        "created_at": datetime.now()
+                    }
+                },
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Analytics init error: {e}")
 
     def start_background_tasks(self):
-        """Start background scheduled tasks"""
-        def run_scheduler():
-            while True:
-                schedule.run_pending()
-                time.sleep(60)
-        
-        threading.Thread(target=run_scheduler, daemon=True).start()
-        
-        # Schedule daily analytics reset
-        schedule.every().day.at("00:00").do(self.reset_daily_analytics)
-        
-        # Schedule cleanup of old data
-        schedule.every().week.do(self.cleanup_old_data)
+        """Start background tasks"""
+        threading.Thread(target=self.check_scheduled_broadcasts, daemon=True).start()
+        threading.Thread(target=self.check_expired_premium_users, daemon=True).start()
 
-    def reset_daily_analytics(self):
-        """Reset daily analytics"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        self.analytics_col.insert_one({
-            "date": today,
-            "total_broadcasts": 0,
-            "total_messages_sent": 0,
-            "active_users": 0,
-            "new_channels_added": 0,
-            "auto_reposts": 0,
-            "auto_deletes": 0,
-            "failed_broadcasts": 0
-        })
-        logger.info("✅ Daily analytics reset")
-
-    def cleanup_old_data(self):
-        """Cleanup old broadcast data"""
-        cutoff_date = datetime.now() - timedelta(days=30)
-        self.broadcast_messages_col.delete_many({"timestamp": {"$lt": cutoff_date}})
-        logger.info("✅ Old broadcast data cleaned up")
-
-    def update_analytics(self, metric: str, increment: int = 1):
-        """Update analytics metrics"""
-        today = datetime.now().strftime('%Y-%m-%d')
-        self.analytics_col.update_one(
-            {"date": today},
-            {"$inc": {metric: increment}},
-            upsert=True
-        )
-
-    def is_admin(self, user_id: int) -> bool:
-        return user_id in ADMIN_IDS
-    
-    def is_owner(self, user_id: int) -> bool:
-        return str(user_id) == OWNER_ID
-
-    def is_authorized(self, user_id: int) -> bool:
-        # Only premium users and admins can use the bot
-        if self.is_admin(user_id):
-            return True
-        return self.is_premium(user_id)
-
-    def is_premium(self, user_id: int) -> bool:
-        user = self.users_col.find_one({"user_id": user_id})
-        if not user:
-            return False
-        if not user.get("is_premium", False):
-            return False
-        if user.get("premium_expires") and user["premium_expires"] < datetime.now():
-            return False
-        return True
-
-    def add_user(self, user_id: int, username: str, first_name: str, last_name: str):
-        """Add or update user with advanced features"""
-        user_data = {
-            "user_id": user_id,
-            "username": username,
-            "first_name": first_name,
-            "last_name": last_name,
-            "is_active": True,
-            "is_premium": False,
-            "created_at": datetime.now(),
-            "last_active": datetime.now(),
-            "total_broadcasts": 0,
-            "total_channels": 0,
-            "subscription_type": "free",
-            "usage_stats": {
-                "daily_broadcasts": 0,
-                "weekly_broadcasts": 0,
-                "monthly_broadcasts": 0
-            }
-        }
-        
-        existing_user = self.users_col.find_one({"user_id": user_id})
-        if existing_user:
-            user_data.update({
-                "created_at": existing_user.get("created_at", datetime.now()),
-                "total_broadcasts": existing_user.get("total_broadcasts", 0),
-                "total_channels": existing_user.get("total_channels", 0),
-                "is_premium": existing_user.get("is_premium", False),
-                "subscription_type": existing_user.get("subscription_type", "free")
-            })
-        
-        self.users_col.update_one(
-            {"user_id": user_id},
-            {"$set": user_data},
-            upsert=True
-        )
-
-    def add_channel(self, channel_id: int, user_id: int, channel_info: dict = None) -> bool:
-        """Add channel with advanced validation"""
+    def add_channel(self, channel_id: int, user_id: int) -> bool:
+        """Add channel to user's collection"""
         try:
-            # Check channel limit
-            user_channels = self.get_channel_count(user_id)
-            user = self.users_col.find_one({"user_id": user_id})
+            # Check if channel already exists for this user
+            existing = self.channels_col.find_one({
+                "channel_id": channel_id,
+                "user_id": user_id
+            })
             
-            max_channels = MAX_CHANNELS_PER_USER
-            if user and user.get("is_premium"):
-                max_channels = MAX_CHANNELS_PER_USER * 2
-            
-            if user_channels >= max_channels:
-                return False
-            
-            # Check if channel already exists
-            existing = self.channels_col.find_one({"channel_id": channel_id, "user_id": user_id})
             if existing:
                 return False
             
-            # Add channel with metadata
+            # Get channel info
+            chat_info = bot.get_chat(channel_id)
+            
             channel_data = {
                 "channel_id": channel_id,
                 "user_id": user_id,
+                "title": chat_info.title,
+                "username": getattr(chat_info, 'username', None),
+                "type": chat_info.type,
+                "member_count": getattr(chat_info, 'member_count', 0),
                 "added_at": datetime.now(),
-                "last_broadcast": None,
-                "total_broadcasts": 0,
-                "is_active": True,
-                "channel_info": channel_info or {},
                 "settings": {
-                    "auto_repost": False,
+                    "broadcast_delay": BROADCAST_DELAY,
                     "auto_delete": False,
-                    "broadcast_delay": BROADCAST_DELAY
+                    "auto_repost": False
                 }
             }
             
             self.channels_col.insert_one(channel_data)
-            
-            # Update user stats
-            self.users_col.update_one(
-                {"user_id": user_id},
-                {"$inc": {"total_channels": 1}}
-            )
-            
-            # Update analytics
-            self.update_analytics("new_channels_added")
-            
+            self.update_analytics("total_channels", 1)
             return True
             
         except Exception as e:
-            logger.error(f"Error adding channel: {e}")
+            logger.error(f"Error adding channel {channel_id}: {e}")
             return False
 
-    def remove_channel(self, channel_id: int, user_id: int) -> bool:
-        """Remove channel with cleanup"""
+    def get_all_channels(self, user_id: int) -> List[Dict]:
+        """Get all channels for a user"""
         try:
-            result = self.channels_col.delete_one({"channel_id": channel_id, "user_id": user_id})
-            if result.deleted_count > 0:
-                # Update user stats
-                self.users_col.update_one(
-                    {"user_id": user_id},
-                    {"$inc": {"total_channels": -1}}
-                )
-                
-                # Remove related broadcast messages
-                self.broadcast_messages_col.delete_many({
-                    "user_id": user_id,
-                    "channel_id": channel_id
-                })
-                
-                return True
-            return False
+            return list(self.channels_col.find({"user_id": user_id}))
         except Exception as e:
-            logger.error(f"Error removing channel: {e}")
-            return False
-
-    def get_all_channels(self, user_id: int) -> List[dict]:
-        """Get all channels with advanced filtering"""
-        try:
-            return list(self.channels_col.find(
-                {"user_id": user_id, "is_active": True}
-            ).sort("added_at", -1))
-        except Exception as e:
-            logger.error(f"Error getting channels: {e}")
+            logger.error(f"Error getting channels for user {user_id}: {e}")
             return []
 
-    def get_channel_count(self, user_id: int) -> int:
-        """Get channel count"""
-        try:
-            return self.channels_col.count_documents({"user_id": user_id, "is_active": True})
-        except Exception as e:
-            logger.error(f"Error counting channels: {e}")
-            return 0
-
-    def save_broadcast_message(self, user_id: int, channel_id: int, message_id: int, broadcast_id: str, message_type: str = "broadcast"):
-        """Save broadcast message with metadata"""
+    def save_broadcast_message(self, user_id: int, channel_id: int, message_id: int, broadcast_id: str):
+        """Save broadcast message details"""
         try:
             self.broadcast_messages_col.insert_one({
                 "user_id": user_id,
                 "channel_id": channel_id,
                 "message_id": message_id,
                 "broadcast_id": broadcast_id,
-                "message_type": message_type,
-                "timestamp": datetime.now(),
-                "status": "sent",
-                "scheduled_delete": None,
-                "auto_repost_enabled": False
+                "sent_at": datetime.now()
             })
-            
-            # Update channel stats
-            self.channels_col.update_one(
-                {"channel_id": channel_id, "user_id": user_id},
-                {
-                    "$inc": {"total_broadcasts": 1},
-                    "$set": {"last_broadcast": datetime.now()}
-                }
-            )
-            
         except Exception as e:
             logger.error(f"Error saving broadcast message: {e}")
 
-    def get_broadcast_messages(self, user_id: int, limit: int = 50) -> List[dict]:
-        """Get broadcast messages with pagination"""
-        try:
-            return list(self.broadcast_messages_col.find(
-                {"user_id": user_id}
-            ).sort("timestamp", -1).limit(limit))
-        except Exception as e:
-            logger.error(f"Error getting broadcast messages: {e}")
-            return []
+    def is_admin(self, user_id: int) -> bool:
+        """Check if user is admin"""
+        return user_id in ADMIN_IDS
 
-    def schedule_broadcast(self, user_id: int, message_data: dict, schedule_time: datetime) -> str:
-        """Schedule a broadcast for later"""
-        try:
-            broadcast_id = f"scheduled_{user_id}_{int(time.time())}"
-            
-            self.scheduled_broadcasts_col.insert_one({
-                "broadcast_id": broadcast_id,
-                "user_id": user_id,
-                "message_data": message_data,
-                "schedule_time": schedule_time,
-                "status": "pending",
-                "created_at": datetime.now()
-            })
-            
-            return broadcast_id
-            
-        except Exception as e:
-            logger.error(f"Error scheduling broadcast: {e}")
-            return None
+    def is_authorized(self, user_id: int) -> bool:
+        """Check if user is authorized (admin or premium)"""
+        return self.is_admin(user_id) or self.is_premium(user_id)
 
-    def get_user_analytics(self, user_id: int) -> dict:
-        """Get user analytics"""
+    def is_premium(self, user_id: int) -> bool:
+        """Check if user has premium access"""
         try:
             user = self.users_col.find_one({"user_id": user_id})
             if not user:
-                return {}
-                
-            total_channels = self.get_channel_count(user_id)
-            total_broadcasts = user.get("total_broadcasts", 0)
+                return False
             
-            # Get recent broadcast stats
-            recent_broadcasts = self.broadcast_messages_col.count_documents({
-                "user_id": user_id,
-                "timestamp": {"$gte": datetime.now() - timedelta(days=7)}
-            })
-            
-            return {
-                "total_channels": total_channels,
-                "total_broadcasts": total_broadcasts,
-                "recent_broadcasts": recent_broadcasts,
-                "subscription_type": user.get("subscription_type", "free"),
-                "member_since": user.get("created_at", datetime.now()).strftime("%Y-%m-%d"),
-                "last_active": user.get("last_active", datetime.now()).strftime("%Y-%m-%d %H:%M")
-            }
-            
+            if user.get("is_premium"):
+                expiry = user.get("premium_expiry")
+                if expiry and datetime.now() < expiry:
+                    return True
+                else:
+                    # Premium expired, update status
+                    self.users_col.update_one(
+                        {"user_id": user_id},
+                        {"$set": {"is_premium": False}}
+                    )
+            return False
         except Exception as e:
-            logger.error(f"Error getting user analytics: {e}")
-            return {}
+            logger.error(f"Error checking premium status: {e}")
+            return False
 
-    def make_premium(self, user_id: int, days: int = 30, plan_type: str = "premium") -> bool:
-        """Make user premium"""
+    def add_user(self, user_id: int, username: str, first_name: str, last_name: str):
+        """Add or update user"""
         try:
-            premium_expires = datetime.now() + timedelta(days=days)
-            
+            self.users_col.update_one(
+                {"user_id": user_id},
+                {
+                    "$set": {
+                        "username": username,
+                        "first_name": first_name,
+                        "last_name": last_name,
+                        "last_active": datetime.now()
+                    },
+                    "$setOnInsert": {
+                        "joined_at": datetime.now(),
+                        "is_premium": False,
+                        "total_broadcasts": 0
+                    }
+                },
+                upsert=True
+            )
+        except Exception as e:
+            logger.error(f"Error adding user: {e}")
+
+    def make_premium(self, user_id: int, days: int = 30) -> bool:
+        """Make user premium (owner only)"""
+        try:
+            expiry = datetime.now() + timedelta(days=days)
             self.users_col.update_one(
                 {"user_id": user_id},
                 {
                     "$set": {
                         "is_premium": True,
-                        "premium_expires": premium_expires,
-                        "subscription_type": plan_type,
-                        "premium_activated": datetime.now()
+                        "premium_expiry": expiry,
+                        "premium_activated_at": datetime.now()
+                    },
+                    "$setOnInsert": {
+                        "joined_at": datetime.now(),
+                        "total_broadcasts": 0
                     }
-                }
+                },
+                upsert=True
             )
-            
-            logger.info(f"User {user_id} made premium for {days} days")
             return True
-            
         except Exception as e:
             logger.error(f"Error making user premium: {e}")
             return False
 
     def remove_premium(self, user_id: int) -> bool:
-        """Remove premium from user"""
+        """Remove premium from user (owner only)"""
         try:
             self.users_col.update_one(
                 {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_premium": False,
-                        "premium_expires": None,
-                        "subscription_type": "free"
-                    }
-                }
+                {"$set": {"is_premium": False}}
             )
-            
-            logger.info(f"Premium removed from user {user_id}")
             return True
-            
         except Exception as e:
             logger.error(f"Error removing premium: {e}")
             return False
 
-    def get_premium_users(self) -> List[dict]:
-        """Get all premium users"""
+    def update_analytics(self, metric: str, value: int = 1):
+        """Update analytics"""
         try:
-            return list(self.users_col.find({
-                "is_premium": True,
-                "premium_expires": {"$gt": datetime.now()}
-            }))
+            self.analytics_col.update_one(
+                {"_id": "stats"},
+                {"$inc": {metric: value}}
+            )
         except Exception as e:
-            logger.error(f"Error getting premium users: {e}")
-            return []
+            logger.error(f"Error updating analytics: {e}")
 
-    def get_expired_premium_users(self) -> List[dict]:
-        """Get expired premium users"""
+    def check_scheduled_broadcasts(self):
+        """Check and execute scheduled broadcasts"""
+        while True:
+            try:
+                now = datetime.now()
+                scheduled = self.scheduled_broadcasts_col.find({
+                    "scheduled_time": {"$lte": now},
+                    "status": "pending"
+                })
+                
+                for broadcast in scheduled:
+                    try:
+                        # Execute broadcast
+                        self.execute_scheduled_broadcast(broadcast)
+                        
+                        # Update status
+                        self.scheduled_broadcasts_col.update_one(
+                            {"_id": broadcast["_id"]},
+                            {"$set": {"status": "completed"}}
+                        )
+                    except Exception as e:
+                        logger.error(f"Error executing scheduled broadcast: {e}")
+                        self.scheduled_broadcasts_col.update_one(
+                            {"_id": broadcast["_id"]},
+                            {"$set": {"status": "failed"}}
+                        )
+                
+                time.sleep(60)  # Check every minute
+            except Exception as e:
+                logger.error(f"Error in scheduled broadcast checker: {e}")
+                time.sleep(60)
+
+    def check_expired_premium_users(self):
+        """Check and update expired premium users"""
+        while True:
+            try:
+                now = datetime.now()
+                expired_users = self.users_col.find({
+                    "is_premium": True,
+                    "premium_expiry": {"$lt": now}
+                })
+                
+                for user in expired_users:
+                    self.users_col.update_one(
+                        {"_id": user["_id"]},
+                        {"$set": {"is_premium": False}}
+                    )
+                    logger.info(f"Premium expired for user {user['user_id']}")
+                
+                time.sleep(3600)  # Check every hour
+            except Exception as e:
+                logger.error(f"Error checking expired premium users: {e}")
+                time.sleep(3600)
+
+    def execute_scheduled_broadcast(self, broadcast_data):
+        """Execute a scheduled broadcast"""
         try:
-            return list(self.users_col.find({
-                "is_premium": True,
-                "premium_expires": {"$lt": datetime.now()}
-            }))
+            # This would contain the logic to execute the broadcast
+            # Implementation depends on how you store the message data
+            pass
         except Exception as e:
-            logger.error(f"Error getting expired premium users: {e}")
-            return []
+            logger.error(f"Error executing scheduled broadcast: {e}")
 
-# Initialize bot instance
+# Initialize broadcast bot
 broadcast_bot = AdvancedBroadcastBot()
+
+def extract_telegram_links(text: str) -> List[str]:
+    """Extract Telegram channel/group links from text"""
+    patterns = [
+        r'https?://t\.me/([a-zA-Z0-9_]+)',
+        r'@([a-zA-Z0-9_]+)',
+        r't\.me/([a-zA-Z0-9_]+)',
+        r'https?://telegram\.me/([a-zA-Z0-9_]+)'
+    ]
+    
+    links = []
+    for pattern in patterns:
+        matches = re.findall(pattern, text)
+        for match in matches:
+            if match not in links:
+                links.append(match)
+    
+    return links
+
+def resolve_telegram_link(link: str) -> Optional[int]:
+    """Resolve Telegram link to channel ID"""
+    try:
+        # Try to get chat info directly
+        if link.startswith('@'):
+            chat_info = bot.get_chat(link)
+            return chat_info.id
+        elif link.startswith('https://t.me/') or link.startswith('t.me/'):
+            username = link.split('/')[-1]
+            chat_info = bot.get_chat(f"@{username}")
+            return chat_info.id
+        else:
+            # Try as username
+            chat_info = bot.get_chat(f"@{link}")
+            return chat_info.id
+    except Exception as e:
+        logger.error(f"Error resolving link {link}: {e}")
+        return None
+
+def send_message_to_channel(channel_data: Dict, message, broadcast_id: str, delete_time: Optional[int] = None) -> Dict:
+    """Send message to a single channel (for concurrent processing)"""
+    result = {
+        "channel_id": channel_data["channel_id"],
+        "success": False,
+        "error": None,
+        "message_id": None
+    }
+    
+    try:
+        channel_id = channel_data["channel_id"]
+        sent = None
+        
+        # Add delay based on channel settings
+        delay = channel_data.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
+        if delay > 0:
+            time.sleep(delay)
+        
+        # Get formatted text if available
+        formatted_text = None
+        if hasattr(message, 'chat') and message.chat.id in bot_state.broadcast_state:
+            state = bot_state.broadcast_state.get(message.chat.id, {})
+            formatted_text = state.get("formatted_text")
+        
+        # Send based on content type
+        if message.content_type == "text":
+            text_to_send = formatted_text if formatted_text else message.text
+            sent = bot.send_message(channel_id, text_to_send, parse_mode="Markdown")
+        elif message.content_type == "photo":
+            caption = formatted_text if formatted_text else (message.caption or "")
+            try:
+                sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+            except Exception as e:
+                sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
+        elif message.content_type == "video":
+            caption = formatted_text if formatted_text else (message.caption or "")
+            try:
+                sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+            except Exception as e:
+                sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="Markdown")
+        elif message.content_type == "document":
+            caption = formatted_text if formatted_text else (message.caption or "")
+            try:
+                sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+            except Exception as e:
+                sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="Markdown")
+        else:
+            sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
+
+        if sent:
+            result["success"] = True
+            result["message_id"] = sent.message_id
+            
+            # Save broadcast message
+            broadcast_bot.save_broadcast_message(message.chat.id, channel_id, sent.message_id, broadcast_id)
+            
+            # Schedule auto delete if enabled
+            if delete_time:
+                threading.Thread(
+                    target=advanced_auto_delete, 
+                    args=(channel_id, sent.message_id, delete_time)
+                ).start()
+                
+    except Exception as e:
+        result["error"] = str(e)
+        logger.error(f"Error sending to channel {channel_data['channel_id']}: {e}")
+    
+    return result
+
+def finish_advanced_broadcast(chat_id: int):
+    """Advanced broadcast function with concurrent processing"""
+    try:
+        state = bot_state.broadcast_state.get(chat_id)
+        if not state:
+            return
+
+        message = state["message"]
+        repost_time = state.get("repost_time")
+        delete_time = state.get("delete_time")
+        broadcast_type = state.get("broadcast_type", "immediate")
+
+        broadcast_id = f"broadcast_{chat_id}_{int(time.time())}"
+        channels = broadcast_bot.get_all_channels(chat_id)
+        
+        if not channels:
+            bot.send_message(chat_id, "❌ No channels found! Please add channels first.")
+            return
+            
+        # Check if user already has an active broadcast
+        if chat_id in bot_state.active_broadcasts:
+            bot.send_message(chat_id, "⚠️ **Broadcast Already Running!**\n\nPlease wait for the current broadcast to complete.")
+            return
+        
+        # Mark broadcast as active
+        bot_state.active_broadcasts[chat_id] = {
+            "started_at": datetime.now(),
+            "total_channels": len(channels),
+            "completed": 0,
+            "failed": 0
+        }
+
+        # Send initial status
+        status_msg = bot.send_message(
+            chat_id,
+            f"📡 **Broadcasting to {len(channels)} channels...**\n\n⏳ Please wait...",
+            parse_mode="Markdown"
+        )
+
+        # Process broadcasts concurrently
+        futures = []
+        for channel in channels:
+            future = broadcast_executor.submit(
+                send_message_to_channel, 
+                channel, 
+                message, 
+                broadcast_id, 
+                delete_time
+            )
+            futures.append(future)
+
+        # Collect results
+        sent_count = 0
+        failed_count = 0
+        failed_channels = []
+        
+        for i, future in enumerate(as_completed(futures)):
+            try:
+                result = future.result()
+                if result["success"]:
+                    sent_count += 1
+                else:
+                    failed_count += 1
+                    failed_channels.append(str(result["channel_id"]))
+                
+                # Update progress every 5 channels
+                if (i + 1) % 5 == 0:
+                    try:
+                        bot.edit_message_text(
+                            f"📡 **Broadcasting Progress**\n\n"
+                            f"✅ Sent: {sent_count}\n"
+                            f"❌ Failed: {failed_count}\n"
+                            f"📊 Progress: {i + 1}/{len(channels)}",
+                            chat_id, status_msg.message_id,
+                            parse_mode="Markdown"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to update progress message: {e}")
+                        
+            except Exception as e:
+                failed_count += 1
+                logger.error(f"Error processing broadcast result: {e}")
+
+        # Update analytics
+        broadcast_bot.update_analytics("total_broadcasts")
+        broadcast_bot.update_analytics("total_messages_sent", sent_count)
+        if failed_count > 0:
+            broadcast_bot.update_analytics("failed_broadcasts", failed_count)
+
+        # Update user stats
+        broadcast_bot.users_col.update_one(
+            {"user_id": chat_id},
+            {
+                "$inc": {"total_broadcasts": 1},
+                "$set": {"last_active": datetime.now()}
+            }
+        )
+
+        # Final result message
+        result_text = f"""
+✅ **Broadcast Completed!**
+
+📊 **Results:**
+• ✅ Sent: `{sent_count}`
+• ❌ Failed: `{failed_count}`
+• 📢 Total Channels: `{len(channels)}`
+• 🕐 Broadcast Time: `{datetime.now().strftime('%H:%M:%S')}`
+
+⚙️ **Settings:**
+• 🔄 Auto Repost: {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
+• 🗑 Auto Delete: {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
+• 📋 Broadcast ID: `{broadcast_id}`
+        """
+        
+        if failed_channels:
+            failed_list = ', '.join(failed_channels[:5])
+            if len(failed_channels) > 5:
+                failed_list += f" and {len(failed_channels) - 5} more"
+            result_text += f"\n❌ **Failed Channels:**\n`{failed_list}`"
+
+        try:
+            bot.edit_message_text(result_text, chat_id, status_msg.message_id, parse_mode="Markdown")
+        except:
+            bot.send_message(chat_id, result_text, parse_mode="Markdown")
+
+        # Start auto repost if enabled
+        if repost_time:
+            bot.send_message(
+                chat_id,
+                f"🔄 **Auto Repost Started!**\n\n"
+                f"⏱ **Interval:** `{repost_time} minutes`\n"
+                f"🗑 **Auto Delete:** {'✅' if delete_time else '❌'}\n"
+                f"🔢 **Channels:** `{sent_count}`\n\n"
+                f"Use **⏹ Stop Repost** button to cancel.",
+                parse_mode="Markdown"
+            )
+            
+            stop_flag = {"stop": False}
+            bot_state.active_reposts[chat_id] = stop_flag
+            threading.Thread(
+                target=advanced_auto_repost, 
+                args=(chat_id, message, repost_time, delete_time, stop_flag)
+            ).start()
+
+        # Clear broadcast state and active broadcast
+        bot_state.broadcast_state.pop(chat_id, None)
+        bot_state.active_broadcasts.pop(chat_id, None)
+
+    except Exception as e:
+        logger.error(f"❌ Error in finish_broadcast: {e}")
+        bot.send_message(chat_id, "❌ An error occurred during broadcast")
+        # Clear active broadcast on error
+        bot_state.active_broadcasts.pop(chat_id, None)
+
+def apply_message_formatting(user_id: int, format_type: str):
+    """Apply formatting to message and show preview"""
+    try:
+        state = bot_state.broadcast_state.get(user_id)
+        if not state or "message" not in state:
+            bot.send_message(user_id, "❌ No message found to format!")
+            return
+            
+        message = state["message"]
+        original_text = message.text or message.caption or ""
+        
+        # Apply formatting based on type
+        if format_type == "format_plain":
+            formatted_text = original_text
+            format_name = "Plain Text"
+        elif format_type == "format_bold":
+            formatted_text = f"**{original_text}**"
+            format_name = "Bold Text"
+        elif format_type == "format_italic":
+            formatted_text = f"*{original_text}*"
+            format_name = "Italic Text"
+        elif format_type == "format_links":
+            # Add some example links
+            formatted_text = f"{original_text}\n\n🔗 **Useful Links:**\n• [Telegram](https://t.me/)\n• [Support](https://t.me/)\n• [Channel](https://t.me/)"
+            format_name = "With Links"
+        elif format_type == "format_code":
+            formatted_text = f"```\n{original_text}\n```"
+            format_name = "Code Format"
+        elif format_type == "format_quote":
+            formatted_text = f"> {original_text}\n\n— *Quote*"
+            format_name = "Quote Style"
+        elif format_type == "format_sticky":
+            formatted_text = f"📌 **IMPORTANT**\n\n{original_text}\n\n📌 *Pinned Message*"
+            format_name = "Sticky Note"
+        elif format_type == "format_highlight":
+            formatted_text = f"⚡ **HIGHLIGHT** ⚡\n\n{original_text}\n\n🎯 *Highlighted Content*"
+            format_name = "Highlight"
+        else:
+            formatted_text = original_text
+            format_name = "Default"
+        
+        # Store formatted text
+        state["formatted_text"] = formatted_text
+        state["format_type"] = format_type
+        
+        # Show preview
+        preview_text = f"""
+🎨 **Formatting Applied: {format_name}**
+
+📝 **Preview:**
+{formatted_text[:200]}{'...' if len(formatted_text) > 200 else ''}
+
+✅ **Ready to broadcast!**
+        """
+        
+        markup = types.InlineKeyboardMarkup(row_width=2)
+        markup.add(
+            types.InlineKeyboardButton("✅ Confirm & Continue", callback_data="format_confirm"),
+            types.InlineKeyboardButton("🔄 Try Different Format", callback_data="format_retry"),
+            types.InlineKeyboardButton("❌ Cancel", callback_data="format_cancel")
+        )
+        
+        bot.send_message(
+            user_id,
+            preview_text,
+            reply_markup=markup,
+            parse_mode="Markdown"
+        )
+        
+    except Exception as e:
+        logger.error(f"Error applying formatting: {e}")
+        bot.send_message(user_id, f"❌ Error applying formatting: {e}")
 
 def advanced_auto_delete(chat_id: int, msg_id: int, delete_time: int):
     """Advanced auto delete with retry and logging"""
@@ -536,34 +755,41 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                     delay = ch.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
                     time.sleep(delay)
                     
+                    # Get formatted text if available
+                    formatted_text = None
+                    if hasattr(message, 'chat') and message.chat.id in bot_state.broadcast_state:
+                        state = bot_state.broadcast_state.get(message.chat.id, {})
+                        formatted_text = state.get("formatted_text")
+                    
                     # Send message based on type
                     if message.content_type == "text":
+                        text_to_send = formatted_text if formatted_text else message.text
                         logger.info(f"🔄 Sending text to {channel_id}")
-                        sent = bot.send_message(channel_id, message.text, parse_mode="HTML")
+                        sent = bot.send_message(channel_id, text_to_send, parse_mode="Markdown")
                     elif message.content_type == "photo":
-                        caption = message.caption or ""
+                        caption = formatted_text if formatted_text else (message.caption or "")
                         logger.info(f"🔄 Sending photo to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
                             logger.warning(f"🔄 Forward failed for {channel_id}, trying send_photo: {e}")
-                            sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="HTML")
+                            sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
                     elif message.content_type == "video":
-                        caption = message.caption or ""
+                        caption = formatted_text if formatted_text else (message.caption or "")
                         logger.info(f"🔄 Sending video to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
                             logger.warning(f"🔄 Forward failed for {channel_id}, trying send_video: {e}")
-                            sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="HTML")
+                            sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="Markdown")
                     elif message.content_type == "document":
-                        caption = message.caption or ""
+                        caption = formatted_text if formatted_text else (message.caption or "")
                         logger.info(f"🔄 Sending document to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
                             logger.warning(f"🔄 Forward failed for {channel_id}, trying send_document: {e}")
-                            sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="HTML")
+                            sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="Markdown")
                     else:
                         logger.info(f"🔄 Forwarding message to {channel_id}")
                         sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
@@ -616,203 +842,6 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
             logger.error(f"🔄 ❌ Error in auto_repost: {e}")
             logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
             time.sleep(60)
-
-def finish_advanced_broadcast(chat_id: int):
-    """Advanced broadcast function with enhanced features"""
-    try:
-        state = bot_state.broadcast_state.get(chat_id)
-        if not state:
-            return
-
-        message = state["message"]
-        repost_time = state.get("repost_time")
-        delete_time = state.get("delete_time")
-        broadcast_type = state.get("broadcast_type", "immediate")
-
-        broadcast_id = f"broadcast_{chat_id}_{int(time.time())}"
-        channels = broadcast_bot.get_all_channels(chat_id)
-        
-        if not channels:
-            bot.send_message(chat_id, "❌ No channels found! Please add channels first.")
-            return
-            
-        sent_count = 0
-        failed_count = 0
-        failed_channels = []
-
-        # Send initial status
-        status_msg = bot.send_message(
-            chat_id,
-            f"📡 **Broadcasting to {len(channels)} channels...**\n\n⏳ Please wait...",
-            parse_mode="Markdown"
-        )
-
-        for i, ch in enumerate(channels):
-            try:
-                sent = None
-                channel_id = ch["channel_id"]
-                
-                logger.info(f"Broadcasting to channel {channel_id} ({i+1}/{len(channels)})")
-                
-                # Add delay between broadcasts
-                if i > 0:
-                    delay = ch.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
-                    time.sleep(delay)
-                
-                # Send based on content type
-                if message.content_type == "text":
-                    logger.info(f"Sending text message to {channel_id}")
-                    sent = bot.send_message(channel_id, message.text, parse_mode="HTML")
-                elif message.content_type == "photo":
-                    caption = message.caption or ""
-                    logger.info(f"Sending photo to {channel_id}")
-                    try:
-                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-                    except Exception as e:
-                        logger.warning(f"Forward failed for {channel_id}, trying send_photo: {e}")
-                        sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="HTML")
-                elif message.content_type == "video":
-                    caption = message.caption or ""
-                    logger.info(f"Sending video to {channel_id}")
-                    try:
-                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-                    except Exception as e:
-                        logger.warning(f"Forward failed for {channel_id}, trying send_video: {e}")
-                        sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="HTML")
-                elif message.content_type == "document":
-                    caption = message.caption or ""
-                    logger.info(f"Sending document to {channel_id}")
-                    try:
-                        sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-                    except Exception as e:
-                        logger.warning(f"Forward failed for {channel_id}, trying send_document: {e}")
-                        sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="HTML")
-                else:
-                    logger.info(f"Forwarding message to {channel_id}")
-                    sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
-
-                if sent:
-                    sent_count += 1
-                    logger.info(f"✅ Successfully sent to {channel_id}")
-                    broadcast_bot.save_broadcast_message(chat_id, channel_id, sent.message_id, broadcast_id)
-
-                    # Schedule auto delete
-                    if delete_time:
-                        logger.info(f"Scheduling auto delete for {channel_id} in {delete_time} minutes")
-                        threading.Thread(
-                            target=advanced_auto_delete, 
-                            args=(channel_id, sent.message_id, delete_time)
-                        ).start()
-                else:
-                    failed_count += 1
-                    failed_channels.append(str(channel_id))
-                    logger.error(f"❌ Failed to send to {channel_id} - sent is None")
-
-                # Update progress every 5 channels
-                if (i + 1) % 5 == 0:
-                    try:
-                        bot.edit_message_text(
-                            f"📡 **Broadcasting Progress**\n\n"
-                            f"✅ Sent: {sent_count}\n"
-                            f"❌ Failed: {failed_count}\n"
-                            f"📊 Progress: {i + 1}/{len(channels)}",
-                            chat_id, status_msg.message_id,
-                            parse_mode="Markdown"
-                        )
-                    except Exception as e:
-                        logger.error(f"Failed to update progress message: {e}")
-
-            except Exception as e:
-                failed_count += 1
-                failed_channels.append(str(channel_id))
-                logger.error(f"❌ Broadcast failed for {channel_id}: {e}")
-                logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
-
-        # Update analytics
-        broadcast_bot.update_analytics("total_broadcasts")
-        broadcast_bot.update_analytics("total_messages_sent", sent_count)
-        if failed_count > 0:
-            broadcast_bot.update_analytics("failed_broadcasts", failed_count)
-
-        # Update user stats
-        broadcast_bot.users_col.update_one(
-            {"user_id": chat_id},
-            {
-                "$inc": {"total_broadcasts": 1},
-                "$set": {"last_active": datetime.now()}
-            }
-        )
-
-        # Final result message
-        result_text = f"""
-✅ **Broadcast Completed!**
-
-📊 **Results:**
-• ✅ Sent: `{sent_count}`
-• ❌ Failed: `{failed_count}`
-• 📢 Total Channels: `{len(channels)}`
-• 🕐 Broadcast Time: `{datetime.now().strftime('%H:%M:%S')}`
-
-⚙️ **Settings:**
-• 🔄 Auto Repost: {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
-• 🗑 Auto Delete: {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
-• 📋 Broadcast ID: `{broadcast_id}`
-        """
-        
-        if failed_channels:
-            failed_list = ', '.join(failed_channels[:5])
-            if len(failed_channels) > 5:
-                failed_list += f" and {len(failed_channels) - 5} more"
-            result_text += f"\n❌ **Failed Channels:**\n`{failed_list}`"
-
-        try:
-            bot.edit_message_text(result_text, chat_id, status_msg.message_id, parse_mode="Markdown")
-        except:
-            bot.send_message(chat_id, result_text, parse_mode="Markdown")
-
-        # Start auto repost if enabled
-        if repost_time:
-            bot.send_message(
-                chat_id,
-                f"🔄 **Auto Repost Started!**\n\n"
-                f"⏱ **Interval:** `{repost_time} minutes`\n"
-                f"🗑 **Auto Delete:** {'✅' if delete_time else '❌'}\n"
-                f"🔢 **Channels:** `{sent_count}`\n\n"
-                f"Use **⏹ Stop Repost** button to cancel.",
-                parse_mode="Markdown"
-            )
-            
-            stop_flag = {"stop": False}
-            bot_state.active_reposts[chat_id] = stop_flag
-            threading.Thread(
-                target=advanced_auto_repost, 
-                args=(chat_id, message, repost_time, delete_time, stop_flag)
-            ).start()
-
-        # Clear broadcast state
-        bot_state.broadcast_state.pop(chat_id, None)
-
-    except Exception as e:
-        logger.error(f"❌ Error in finish_broadcast: {e}")
-        bot.send_message(chat_id, "❌ An error occurred during broadcast")
-
-def stop_repost(chat_id: int):
-    """Stop active repost with confirmation"""
-    try:
-        if chat_id in bot_state.active_reposts:
-            bot_state.active_reposts[chat_id]["stop"] = True
-            del bot_state.active_reposts[chat_id]
-            
-            bot.send_message(
-                chat_id, 
-                "⏹ **Auto Repost Stopped!**\n\n✅ All repost cycles have been terminated.",
-                parse_mode="Markdown"
-            )
-        else:
-            bot.send_message(chat_id, "⚠️ No active auto repost found.")
-    except Exception as e:
-        logger.error(f"Error stopping repost: {e}")
-        bot.send_message(chat_id, "❌ Error stopping repost")
 
 @bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id"])
 def start_cmd(message):
@@ -1179,6 +1208,69 @@ def callback_handler(call):
 
         elif call.data == "stop_repost":
             stop_repost(user_id)
+            
+        # Formatting handlers
+        elif call.data.startswith("format_"):
+            if call.data == "format_skip":
+                # Skip formatting and go to repost question
+                state["step"] = "ask_repost"
+                markup = types.InlineKeyboardMarkup()
+                markup.add(
+                    types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
+                    types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+                )
+                bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
+            else:
+                # Apply formatting
+                apply_message_formatting(user_id, call.data)
+                
+        elif call.data == "format_confirm":
+            # Confirm formatting and continue to repost
+            state["step"] = "ask_repost"
+            markup = types.InlineKeyboardMarkup()
+            markup.add(
+                types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
+                types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+            )
+            bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
+            
+        elif call.data == "format_retry":
+            # Show formatting options again
+            state["step"] = "ask_formatting"
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("📝 Plain Text", callback_data="format_plain"),
+                types.InlineKeyboardButton("🎨 Bold Text", callback_data="format_bold"),
+                types.InlineKeyboardButton("📋 Italic Text", callback_data="format_italic"),
+                types.InlineKeyboardButton("🔗 With Links", callback_data="format_links"),
+                types.InlineKeyboardButton("📊 Code Format", callback_data="format_code"),
+                types.InlineKeyboardButton("💬 Quote Style", callback_data="format_quote"),
+                types.InlineKeyboardButton("📌 Sticky Note", callback_data="format_sticky"),
+                types.InlineKeyboardButton("🎯 Highlight", callback_data="format_highlight"),
+                types.InlineKeyboardButton("🚀 Skip Formatting", callback_data="format_skip")
+            )
+            
+            bot.send_message(
+                user_id, 
+                "🎨 **Choose Message Formatting:**\n\n"
+                "Select how you want your message to appear:\n\n"
+                "• 📝 **Plain Text** - Simple text\n"
+                "• 🎨 **Bold Text** - **Bold formatting**\n"
+                "• 📋 **Italic Text** - *Italic formatting*\n"
+                "• 🔗 **With Links** - Clickable links\n"
+                "• 📊 **Code Format** - `Code blocks`\n"
+                "• 💬 **Quote Style** - > Quoted text\n"
+                "• 📌 **Sticky Note** - 📌 Pinned style\n"
+                "• 🎯 **Highlight** - ⚡ Highlighted\n"
+                "• 🚀 **Skip Formatting** - Continue without changes",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            
+        elif call.data == "format_cancel":
+            # Cancel formatting and clear state
+            bot_state.broadcast_state.pop(user_id, None)
+            bot.send_message(user_id, "❌ Formatting cancelled. Send /start to try again.")
             
         elif call.data == "stop_and_delete":
             markup = types.InlineKeyboardMarkup(row_width=2)
@@ -1871,13 +1963,38 @@ def handle_message(message):
 
         if state and state.get("step") == "waiting_msg":
             state["message"] = message
-            state["step"] = "ask_repost"
-            markup = types.InlineKeyboardMarkup()
+            state["step"] = "ask_formatting"
+            
+            # Show formatting options
+            markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("✅ Enable Auto Repost", callback_data="repost_yes"),
-                types.InlineKeyboardButton("❌ Broadcast Once", callback_data="repost_no"),
+                types.InlineKeyboardButton("📝 Plain Text", callback_data="format_plain"),
+                types.InlineKeyboardButton("🎨 Bold Text", callback_data="format_bold"),
+                types.InlineKeyboardButton("📋 Italic Text", callback_data="format_italic"),
+                types.InlineKeyboardButton("🔗 With Links", callback_data="format_links"),
+                types.InlineKeyboardButton("📊 Code Format", callback_data="format_code"),
+                types.InlineKeyboardButton("💬 Quote Style", callback_data="format_quote"),
+                types.InlineKeyboardButton("📌 Sticky Note", callback_data="format_sticky"),
+                types.InlineKeyboardButton("🎯 Highlight", callback_data="format_highlight"),
+                types.InlineKeyboardButton("🚀 Skip Formatting", callback_data="format_skip")
             )
-            bot.send_message(user_id, "🔄 Enable Auto Repost?", reply_markup=markup)
+            
+            bot.send_message(
+                user_id, 
+                "🎨 **Choose Message Formatting:**\n\n"
+                "Select how you want your message to appear:\n\n"
+                "• 📝 **Plain Text** - Simple text\n"
+                "• 🎨 **Bold Text** - **Bold formatting**\n"
+                "• 📋 **Italic Text** - *Italic formatting*\n"
+                "• 🔗 **With Links** - Clickable links\n"
+                "• 📊 **Code Format** - `Code blocks`\n"
+                "• 💬 **Quote Style** - > Quoted text\n"
+                "• 📌 **Sticky Note** - 📌 Pinned style\n"
+                "• 🎯 **Highlight** - ⚡ Highlighted\n"
+                "• 🚀 **Skip Formatting** - Continue without changes",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
             return
 
         # Handle custom auto delete time input
@@ -1978,28 +2095,40 @@ def handle_message(message):
                 bot.send_message(user_id, "⚠️ Invalid user ID. Please enter a valid number.")
             return
 
-        # Handle channel ID input
-        if message.text and message.text.startswith("-100"):
+        # Handle channel ID input and Telegram links
+        if message.text:
             state = bot_state.broadcast_state.get(user_id, {})
             
             # Check if user is in bulk add mode
             if state.get("step") == "bulk_add_channels":
                 # Handle bulk channel addition
                 try:
-                    # Parse channel IDs from different formats
+                    # Parse channel IDs and links from different formats
                     channel_text = message.text.strip()
                     channel_ids = []
                     
-                    # Split by newlines, commas, or spaces
+                    # Extract Telegram links first
+                    telegram_links = extract_telegram_links(channel_text)
+                    for link in telegram_links:
+                        channel_id = resolve_telegram_link(link)
+                        if channel_id:
+                            channel_ids.append(str(channel_id))
+                    
+                    # Split by newlines, commas, or spaces for direct IDs
                     if '\n' in channel_text:
                         # Format: -1001234567890\n-1001234567891
-                        channel_ids = [line.strip() for line in channel_text.split('\n') if line.strip().startswith('-100')]
+                        direct_ids = [line.strip() for line in channel_text.split('\n') if line.strip().startswith('-100')]
+                        channel_ids.extend(direct_ids)
                     elif ',' in channel_text:
                         # Format: -1001234567890, -1001234567891
-                        channel_ids = [ch.strip() for ch in channel_text.split(',') if ch.strip().startswith('-100')]
-                    else:
-                        # Single channel
-                        channel_ids = [channel_text]
+                        direct_ids = [ch.strip() for ch in channel_text.split(',') if ch.strip().startswith('-100')]
+                        channel_ids.extend(direct_ids)
+                    elif channel_text.startswith('-100'):
+                        # Single channel ID
+                        channel_ids.append(channel_text)
+                    
+                    # Remove duplicates
+                    channel_ids = list(set(channel_ids))
                     
                     # Limit to 100 channels
                     if len(channel_ids) > 100:
@@ -2079,15 +2208,33 @@ def handle_message(message):
                     bot_state.broadcast_state.pop(user_id, None)
                 
             else:
-                # Handle single channel addition
+                # Handle single channel addition (ID or link)
                 try:
-                    ch_id = int(message.text.strip())
-                    chat_info = bot.get_chat(ch_id)
-                    
-                    if broadcast_bot.add_channel(ch_id, user_id):
-                        bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added!", parse_mode="Markdown")
+                    # Check if it's a Telegram link
+                    telegram_links = extract_telegram_links(message.text)
+                    if telegram_links:
+                        # Handle as link
+                        link = telegram_links[0]
+                        channel_id = resolve_telegram_link(link)
+                        if channel_id:
+                            chat_info = bot.get_chat(channel_id)
+                            if broadcast_bot.add_channel(channel_id, user_id):
+                                bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added from link!", parse_mode="Markdown")
+                            else:
+                                bot.send_message(user_id, f"⚠️ Channel already exists!")
+                        else:
+                            bot.send_message(user_id, f"❌ Could not resolve link: {link}")
+                    elif message.text.startswith('-100'):
+                        # Handle as direct channel ID
+                        ch_id = int(message.text.strip())
+                        chat_info = bot.get_chat(ch_id)
+                        
+                        if broadcast_bot.add_channel(ch_id, user_id):
+                            bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added!", parse_mode="Markdown")
+                        else:
+                            bot.send_message(user_id, f"⚠️ Channel already exists!")
                     else:
-                        bot.send_message(user_id, f"⚠️ Channel already exists!")
+                        bot.send_message(user_id, f"❌ Invalid format! Use channel ID (-100...) or Telegram link")
                 except Exception as e:
                     bot.send_message(user_id, f"❌ Error: {e}")
 
