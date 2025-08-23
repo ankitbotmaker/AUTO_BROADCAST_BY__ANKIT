@@ -431,13 +431,10 @@ def resolve_telegram_link(link: str) -> Optional[int]:
         elif link.startswith('https://t.me/') or link.startswith('t.me/'):
             # Extract username preserving underscores
             username = link.split('/')[-1]
-            logger.info(f"Extracted username from {link}: {username}")
             # Ensure username is properly formatted
             if not username.startswith('@'):
                 username = f"@{username}"
-            logger.info(f"Formatted username: {username}")
             chat_info = bot.get_chat(username)
-            logger.info(f"Chat info: {chat_info.username} - {chat_info.title}")
             return chat_info.id
         elif link.startswith('https://telegram.me/'):
             # Extract username preserving underscores
@@ -462,13 +459,9 @@ def auto_add_telegram_links(user_id: int, text: str) -> List[Dict]:
     added_channels = []
     links = extract_telegram_links(text)
     
-    logger.info(f"Extracted links from text: {links}")
-    
     for link in links:
         try:
-            logger.info(f"Processing link: {link}")
             channel_id = resolve_telegram_link(link)
-            logger.info(f"Resolved channel ID: {channel_id}")
             if channel_id:
                 # Check if channel already exists
                 existing = broadcast_bot.channels_col.find_one({
@@ -483,11 +476,8 @@ def auto_add_telegram_links(user_id: int, text: str) -> List[Dict]:
                     
                     # Add channel to database
                     broadcast_bot.add_channel(
-                        user_id=user_id,
                         channel_id=channel_id,
-                        channel_name=channel_name,
-                        channel_type=chat_info.type,
-                        username=chat_info.username
+                        user_id=user_id
                     )
                     
                     added_channels.append({
