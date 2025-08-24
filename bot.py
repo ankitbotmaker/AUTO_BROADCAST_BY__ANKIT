@@ -949,7 +949,7 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
             logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
             time.sleep(60)
 
-@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test"])
+@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test", "cid"])
 def start_cmd(message):
     """Enhanced start command with analytics"""
     user_id = message.from_user.id
@@ -1142,6 +1142,89 @@ Contact admin to upgrade to Premium!
         
         bot.send_message(message.chat.id, id_text, parse_mode="Markdown")
         return
+    
+    if message.text.startswith("/cid"):
+        # Get all channel IDs where bot is ADMIN
+        try:
+            user_channels = broadcast_bot.channels_col.find({"user_id": user_id})
+            admin_channels = []
+            
+            for channel_doc in user_channels:
+                channel_id = channel_doc["channel_id"]
+                try:
+                    # Check if bot is admin in this channel
+                    chat_member = bot.get_chat_member(channel_id, bot.get_me().id)
+                    if chat_member.status in ["administrator", "creator"]:
+                        chat_info = bot.get_chat(channel_id)
+                        admin_channels.append({
+                            "id": channel_id,
+                            "title": chat_info.title or "Unknown",
+                            "username": chat_info.username,
+                            "type": chat_info.type,
+                            "member_count": getattr(chat_info, 'member_count', 0)
+                        })
+                except Exception as e:
+                    logger.error(f"Error checking admin status for {channel_id}: {e}")
+                    continue
+            
+            if admin_channels:
+                cid_text = f"""
+🤖 **CHANNELS WHERE BOT IS ADMIN** 👑
+
+**📊 Total Admin Channels:** `{len(admin_channels)}`
+
+**🔢 CHANNEL IDS:**
+"""
+                for i, channel in enumerate(admin_channels, 1):
+                    username_text = f"@{channel['username']}" if channel['username'] else "Private"
+                    member_text = f" • {channel['member_count']} members" if channel['member_count'] > 0 else ""
+                    cid_text += f"""
+**{i}.** **{channel['title']}**
+• **ID:** `{channel['id']}`
+• **Username:** {username_text}
+• **Type:** {channel['type'].title()}{member_text}
+"""
+                
+                cid_text += f"""
+
+**💡 USAGE:**
+• Copy any ID to add it elsewhere
+• Bot has **FULL ADMIN** rights in these channels
+• All IDs are ready for bulk operations
+
+**⚠️ IMPORTANT:** Bot must remain **ADMIN** for features to work!
+"""
+            else:
+                cid_text = f"""
+❌ **NO ADMIN CHANNELS FOUND**
+
+**🚫 Bot is not admin in any channels**
+
+**💡 To make bot admin:**
+1. Add bot to your channel
+2. Make bot **ADMINISTRATOR**
+3. Give necessary permissions
+4. Use `/cid` again to check
+
+**🔧 Required permissions:**
+• Post messages
+• Delete messages  
+• Pin messages
+• Manage messages
+"""
+            
+            bot.send_message(message.chat.id, cid_text, parse_mode="Markdown")
+            logger.info(f"📋 /cid command executed by user {user_id} - Found {len(admin_channels)} admin channels")
+            return
+            
+        except Exception as e:
+            logger.error(f"Error in /cid command: {e}")
+            bot.send_message(
+                message.chat.id, 
+                "❌ **Error getting channel IDs**\n\nPlease try again later.",
+                parse_mode="Markdown"
+            )
+            return
 
     if message.text.startswith("/cleanup") or message.text.startswith("/clear"):
         if not (broadcast_bot.is_premium(message.chat.id) or broadcast_bot.is_admin(message.chat.id)):
@@ -1174,55 +1257,56 @@ Choose an option:
     # Main menu
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("📢 Broadcast", callback_data="broadcast"),
-        types.InlineKeyboardButton("➕ Add Channel", callback_data="add_channel"),
-        types.InlineKeyboardButton("📋 My Channels", callback_data="my_channels"),
-        types.InlineKeyboardButton("🔍 Find Channels", callback_data="find_channels"),
+        types.InlineKeyboardButton("📢 BROADCAST", callback_data="broadcast"),
+        types.InlineKeyboardButton("➕ ADD CHANNEL", callback_data="add_channel"),
+        types.InlineKeyboardButton("📋 MY CHANNELS", callback_data="my_channels"),
+        types.InlineKeyboardButton("🔍 FIND CHANNELS", callback_data="find_channels"),
     )
     markup.add(
-        types.InlineKeyboardButton("📊 Analytics", callback_data="user_analytics"),
-        types.InlineKeyboardButton("📅 Schedule", callback_data="schedule_broadcast"),
-        types.InlineKeyboardButton("📜 History", callback_data="show_history"),
-        types.InlineKeyboardButton("⚙️ Settings", callback_data="user_settings"),
+        types.InlineKeyboardButton("📊 ANALYTICS", callback_data="user_analytics"),
+        types.InlineKeyboardButton("📅 SCHEDULE", callback_data="schedule_broadcast"),
+        types.InlineKeyboardButton("📜 HISTORY", callback_data="show_history"),
+        types.InlineKeyboardButton("⚙️ SETTINGS", callback_data="user_settings"),
     )
     markup.add(
-        types.InlineKeyboardButton("🧪 Test Bot", callback_data="test_button"),
-        types.InlineKeyboardButton("⏹ Stop Repost", callback_data="stop_repost"),
-        types.InlineKeyboardButton("🗑 Stop & Delete", callback_data="stop_and_delete"),
-        types.InlineKeyboardButton("🛑 Instant Stop All", callback_data="instant_stop_all"),
-        types.InlineKeyboardButton("🧹 Auto Cleanup", callback_data="cleanup_menu"),
+        types.InlineKeyboardButton("🧪 TEST BOT", callback_data="test_button"),
+        types.InlineKeyboardButton("⏹ STOP REPOST", callback_data="stop_repost"),
+        types.InlineKeyboardButton("🗑 STOP & DELETE", callback_data="stop_and_delete"),
+        types.InlineKeyboardButton("🛑 INSTANT STOP ALL", callback_data="instant_stop_all"),
+        types.InlineKeyboardButton("🧹 AUTO CLEANUP", callback_data="cleanup_menu"),
     )
     
     if broadcast_bot.is_admin(message.chat.id):
         markup.add(
-            types.InlineKeyboardButton("🔧 Admin Panel", callback_data="admin_panel"),
+            types.InlineKeyboardButton("🔧 ADMIN PANEL", callback_data="admin_panel"),
         )
 
     user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
     welcome_text = f"""
-🎉 **Advanced Broadcast Bot** 🚀
+🎉 **ADVANCED BROADCAST BOT** 🚀
 
-> **👋 Welcome, {message.from_user.first_name}!**
+> **👋 WELCOME, {message.from_user.first_name.upper()}!**
 
-**📊 Your Dashboard:**
-• 📢 **Channels:** `{user_analytics.get('total_channels', 0)}`
-• 📈 **Broadcasts:** `{user_analytics.get('total_broadcasts', 0)}`
-• 💎 **Plan:** `{user_analytics.get('subscription_type', 'Free').title()}`
-• 🟢 **Status:** ✅ Online
+**📊 YOUR DASHBOARD:**
+• 📢 **CHANNELS:** `{user_analytics.get('total_channels', 0)}`
+• 📈 **BROADCASTS:** `{user_analytics.get('total_broadcasts', 0)}`
+• 💎 **PLAN:** `{user_analytics.get('subscription_type', 'FREE').upper()}`
+• 🟢 **STATUS:** ✅ **ONLINE**
 
-**🔥 Advanced Features:**
-• ⚡ **Auto Repost & Delete**
-• ⏰ **Scheduled Broadcasts**  
-• 📊 **Real-time Analytics**
-• 📋 **Bulk Operations**
-• 🛑 **Instant Stop All**
+**🔥 ADVANCED FEATURES:**
+• ⚡ **AUTO REPOST & DELETE**
+• ⏰ **SCHEDULED BROADCASTS**  
+• 📊 **REAL-TIME ANALYTICS**
+• 📋 **BULK OPERATIONS**
+• 🛑 **INSTANT STOP ALL**
 
-**💡 Pro Tips:**
-• Use `/id` to get channel IDs quickly!
-• Use "🛑 Instant Stop All" for emergency stops
-• Use "🧹 Auto Cleanup" for complete cleanup
+**💡 PRO COMMANDS:**
+• **`/id`** - Get channel IDs quickly!
+• **`/cid`** - Get ALL ADMIN channel IDs!
+• **`/stats`** - Your broadcast statistics
+• **`/test`** - Test bot functionality
 
-**Choose an option below:**
+**🚀 CHOOSE AN OPTION BELOW:**
     """
     
     try:
@@ -2202,31 +2286,13 @@ def handle_message(message):
             # Store original text as formatted text
             original_text = message.text or message.caption or ""
             
-            # Auto-add Telegram links as channels and clean the text
+            # Auto-add Telegram links as channels but PRESERVE original text
             added_channels = []
-            cleaned_text = original_text
             if original_text:
                 added_channels = auto_add_telegram_links(user_id, original_text)
-                
-                # Remove Telegram links from the broadcast text
-                if added_channels:
-                    # Remove all Telegram links from the text
-                    import re
-                    # Remove t.me links
-                    cleaned_text = re.sub(r'https?://t\.me/[a-zA-Z0-9_]+', '', cleaned_text)
-                    # Remove telegram.me links
-                    cleaned_text = re.sub(r'https?://telegram\.me/[a-zA-Z0-9_]+', '', cleaned_text)
-                    # Remove @username mentions
-                    cleaned_text = re.sub(r'@[a-zA-Z0-9_]+', '', cleaned_text)
-                    # Clean up extra whitespace
-                    cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
             
-            # Store cleaned text for broadcasting
-            if cleaned_text and cleaned_text.strip():
-                state["formatted_text"] = cleaned_text
-            else:
-                # If cleaned text is empty, use original text
-                state["formatted_text"] = original_text
+            # Store ORIGINAL text for broadcasting (don't remove links!)
+            state["formatted_text"] = original_text
             state["format_type"] = "plain"
             
             # Go directly to repost question
@@ -2250,8 +2316,8 @@ def handle_message(message):
                     repost_message += f"\n\n🔍 **Detected Links:**\n{links_text}"
                 
                 # Show what text will be broadcasted
-                if cleaned_text and cleaned_text != original_text:
-                    preview_text = cleaned_text[:100] + "..." if len(cleaned_text) > 100 else cleaned_text
+                if original_text:
+                    preview_text = original_text[:100] + "..." if len(original_text) > 100 else original_text
                     repost_message += f"\n\n📝 **Broadcast Text:**\n`{preview_text}`"
             
             sent_msg = bot.send_message(
