@@ -61,9 +61,9 @@ try:
     analytics_col = db["analytics"]
     settings_col = db["settings"]
     
-    logger.info("✅ MongoDB connected successfully")
+    logger.info("MongoDB connected successfully")
 except Exception as e:
-    logger.error(f"❌ MongoDB connection failed: {e}")
+    logger.error(f"MongoDB connection failed: {e}")
     raise
 
 # Initialize bot
@@ -745,7 +745,7 @@ def finish_advanced_broadcast(chat_id: int):
         bot_state.active_broadcasts.pop(chat_id, None)
 
     except Exception as e:
-        logger.error(f"❌ Error in finish_broadcast: {e}")
+        logger.error(f"Error in finish_broadcast: {e}")
         bot.send_message(chat_id, "❌ An error occurred during broadcast")
         # Clear active broadcast on error
         bot_state.active_broadcasts.pop(chat_id, None)
@@ -798,10 +798,10 @@ def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
             "type": "auto_delete"
         })
         
-        logger.info(f"⏰ Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
         
     except Exception as e:
-        logger.error(f"❌ Error scheduling auto delete: {e}")
+        logger.error(f"Error scheduling auto delete: {e}")
 
 def execute_auto_delete(chat_id: int, msg_id: int):
     """Execute auto delete with retry logic"""
@@ -810,7 +810,7 @@ def execute_auto_delete(chat_id: int, msg_id: int):
         try:
             result = bot.delete_message(chat_id, msg_id)
             if result:
-                logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+                logger.info(f"Auto deleted message {msg_id} from {chat_id}")
                 broadcast_bot.update_analytics("auto_deletes")
                 
                 # Update message status
@@ -826,28 +826,28 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 
         except Exception as e:
             if attempt < max_retries - 1:
-                logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
+                logger.warning(f"Delete attempt {attempt + 1} failed: {e}")
                 time.sleep(2)
             else:
-                logger.error(f"❌ Auto delete failed for {chat_id}: {e}")
+                logger.error(f"Auto delete failed for {chat_id}: {e}")
                 
     return False
 
 def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[int], stop_flag: Dict[str, bool]):
     """Advanced auto repost with enhanced features"""
-    logger.info(f"🔄 Starting auto repost for user {chat_id}")
+    logger.info(f"Starting auto repost for user {chat_id}")
     repost_count = 0
     
     while not stop_flag.get("stop", False):
         try:
-            logger.info(f"🔄 Auto repost cycle {repost_count + 1} starting...")
+            logger.info(f"Auto repost cycle {repost_count + 1} starting...")
             time.sleep(repost_time * 60)
             if stop_flag.get("stop", False):
-                logger.info(f"🔄 Auto repost stopped for user {chat_id}")
+                logger.info(f"Auto repost stopped for user {chat_id}")
                 break
                 
             channels = broadcast_bot.get_all_channels(chat_id)
-            logger.info(f"🔄 Got {len(channels)} channels for repost")
+            logger.info(f"Got {len(channels)} channels for repost")
             success_count = 0
             failed_count = 0
             
@@ -858,7 +858,7 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                         
                     sent = None
                     channel_id = ch["channel_id"]
-                    logger.info(f"🔄 Reposting to channel {channel_id}")
+                    logger.info(f"Reposting to channel {channel_id}")
                     
                     # Add delay between channels
                     delay = ch.get("settings", {}).get("broadcast_delay", BROADCAST_DELAY)
@@ -873,39 +873,39 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                     # Send message based on type
                     if message.content_type == "text":
                         text_to_send = formatted_text if formatted_text else message.text
-                        logger.info(f"🔄 Sending text to {channel_id}")
+                        logger.info(f"Sending text to {channel_id}")
                         sent = bot.send_message(channel_id, text_to_send, parse_mode="Markdown")
                     elif message.content_type == "photo":
                         caption = formatted_text if formatted_text else (message.caption or "")
-                        logger.info(f"🔄 Sending photo to {channel_id}")
+                        logger.info(f"Sending photo to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
-                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_photo: {e}")
+                            logger.warning(f"Forward failed for {channel_id}, trying send_photo: {e}")
                             sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
                     elif message.content_type == "video":
                         caption = formatted_text if formatted_text else (message.caption or "")
-                        logger.info(f"🔄 Sending video to {channel_id}")
+                        logger.info(f"Sending video to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
-                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_video: {e}")
+                            logger.warning(f"Forward failed for {channel_id}, trying send_video: {e}")
                             sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="Markdown")
                     elif message.content_type == "document":
                         caption = formatted_text if formatted_text else (message.caption or "")
-                        logger.info(f"🔄 Sending document to {channel_id}")
+                        logger.info(f"Sending document to {channel_id}")
                         try:
                             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
                         except Exception as e:
-                            logger.warning(f"🔄 Forward failed for {channel_id}, trying send_document: {e}")
+                            logger.warning(f"Forward failed for {channel_id}, trying send_document: {e}")
                             sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="Markdown")
                     else:
-                        logger.info(f"🔄 Forwarding message to {channel_id}")
+                        logger.info(f"Forwarding message to {channel_id}")
                         sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
 
                     if sent:
                         success_count += 1
-                        logger.info(f"🔄 ✅ Successfully reposted to {channel_id}")
+                        logger.info(f"Successfully reposted to {channel_id}")
                         broadcast_bot.save_broadcast_message(
                             chat_id, channel_id, sent.message_id, 
                             f"auto_repost_{chat_id}_{int(time.time())}", "auto_repost"
@@ -913,21 +913,21 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                         
                         # Schedule auto delete if enabled
                         if delete_time:
-                            logger.info(f"🔄 Scheduling auto delete for {channel_id} in {delete_time} minutes")
+                            logger.info(f"Scheduling auto delete for {channel_id} in {delete_time} minutes")
                             schedule_auto_delete(channel_id, sent.message_id, delete_time)
                     else:
                         failed_count += 1
-                        logger.error(f"🔄 ❌ Failed to repost to {channel_id} - sent is None")
+                        logger.error(f"Failed to repost to {channel_id} - sent is None")
                         
                 except Exception as e:
                     failed_count += 1
-                    logger.error(f"🔄 ❌ Repost failed for {ch.get('channel_id')}: {e}")
-                    logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
+                    logger.error(f"Repost failed for {ch.get('channel_id')}: {e}")
+                    logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
             
             repost_count += 1
             broadcast_bot.update_analytics("auto_reposts")
             
-            logger.info(f"🔄 Repost cycle {repost_count} completed - Success: {success_count}, Failed: {failed_count}")
+            logger.info(f"Repost cycle {repost_count} completed - Success: {success_count}, Failed: {failed_count}")
             
             # Notify user every 10 reposts
             if repost_count % 10 == 0:
@@ -942,11 +942,11 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                         parse_mode="Markdown"
                     )
                 except Exception as e:
-                    logger.error(f"🔄 Failed to send repost update: {e}")
+                    logger.error(f"Failed to send repost update: {e}")
             
         except Exception as e:
-            logger.error(f"🔄 ❌ Error in auto_repost: {e}")
-            logger.error(f"🔄 Exception details: {type(e).__name__}: {str(e)}")
+            logger.error(f"Error in auto_repost: {e}")
+            logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
             time.sleep(60)
 
 @bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test", "cid"])
@@ -1028,7 +1028,7 @@ def start_cmd(message):
             "⚡ **Response Time:** Instant\n\n"
             "✅ All systems are working correctly!"
         )
-        logger.info(f"✅ Test command executed successfully by user {message.chat.id}")
+        logger.info(f"Test command executed successfully by user {message.chat.id}")
         return
     
     if message.text.startswith("/stats"):
@@ -1214,7 +1214,7 @@ Contact admin to upgrade to Premium!
 """
             
             bot.send_message(message.chat.id, cid_text, parse_mode="Markdown")
-            logger.info(f"📋 /cid command executed by user {user_id} - Found {len(admin_channels)} admin channels")
+            logger.info(f"/cid command executed by user {user_id} - Found {len(admin_channels)} admin channels")
             return
             
         except Exception as e:
@@ -2633,26 +2633,26 @@ if __name__ == "__main__":
                     if response.status_code == 200:
                         result = response.json()
                         if result.get("ok"):
-                            logger.info(f"✅ Webhook deletion attempt {attempt + 1} successful")
+                            logger.info(f"Webhook deletion attempt {attempt + 1} successful")
                             break
                         else:
-                            logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed: {result}")
+                            logger.warning(f"Webhook deletion attempt {attempt + 1} failed: {result}")
                     else:
-                        logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed with status {response.status_code}")
+                        logger.warning(f"Webhook deletion attempt {attempt + 1} failed with status {response.status_code}")
                     
                     time.sleep(3)  # Wait between attempts
                 except Exception as e:
-                    logger.warning(f"⚠️ Webhook deletion attempt {attempt + 1} failed: {e}")
+                    logger.warning(f"Webhook deletion attempt {attempt + 1} failed: {e}")
                     time.sleep(3)
             
             # Also try bot.remove_webhook() as backup
             try:
                 bot.remove_webhook()
-                logger.info("✅ Backup webhook removal successful")
+                logger.info("Backup webhook removal successful")
             except Exception as e:
-                logger.warning(f"⚠️ Backup webhook removal failed: {e}")
+                logger.warning(f"Backup webhook removal failed: {e}")
             
-            logger.info("🔄 Starting polling after webhook removal...")
+            logger.info("Starting polling after webhook removal...")
             
             # Start Flask server for health check
             from flask import Flask
@@ -2676,28 +2676,28 @@ if __name__ == "__main__":
             flask_thread.start()
             
             # Start bot polling
-            logger.info("🔄 Starting bot polling...")
+            logger.info("Starting bot polling...")
             try:
                 bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
             except Exception as e:
-                logger.error(f"❌ Polling error: {e}")
+                logger.error(f"Polling error: {e}")
                 # Retry polling
                 time.sleep(5)
                 bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
             
         else:
             # Local development - use polling
-            logger.info("🏠 Starting locally with polling...")
+            logger.info("Starting locally with polling...")
             
             # Remove any existing webhook for local development
             try:
                 bot.remove_webhook()
-                logger.info("✅ Webhook removed for local development")
+                logger.info("Webhook removed for local development")
             except Exception as e:
-                logger.warning(f"⚠️ Failed to remove webhook locally: {e}")
+                logger.warning(f"Failed to remove webhook locally: {e}")
             
             bot.infinity_polling(none_stop=True, timeout=60)
             
     except Exception as e:
-        logger.error(f"❌ Bot crashed: {e}")
+        logger.error(f"Bot crashed: {e}")
         # Auto-restart logic could be added here

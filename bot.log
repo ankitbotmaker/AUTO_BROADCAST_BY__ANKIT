@@ -4082,3 +4082,4 @@ telebot.apihelper.ApiTelegramException: A request to the Telegram API was unsucc
 2025-08-23 17:38:05,811 - __main__ - INFO - Processing callback: format_links for user 7792539085
 2025-08-23 17:38:26,357 - __main__ - INFO - Callback received: format_code from user 7792539085
 2025-08-23 17:38:26,361 - __main__ - INFO - Processing callback: format_code for user 7792539085
+2025-08-24 20:38:13,662 - bot - INFO - MongoDB connected successfully
