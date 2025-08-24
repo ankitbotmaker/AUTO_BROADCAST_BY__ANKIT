@@ -328,13 +328,16 @@ class AdvancedBroadcastBot:
             logger.error(f"Error updating analytics: {e}")
 
     def check_scheduled_broadcasts(self):
-        """Check and execute scheduled broadcasts"""
+        """Check and execute scheduled broadcasts and auto-deletes"""
         while True:
             try:
                 now = datetime.now()
+                
+                # Check scheduled broadcasts
                 scheduled = self.scheduled_broadcasts_col.find({
                     "scheduled_time": {"$lte": now},
-                    "status": "pending"
+                    "status": "pending",
+                    "type": {"$ne": "auto_delete"}
                 })
                 
                 for broadcast in scheduled:
@@ -354,10 +357,34 @@ class AdvancedBroadcastBot:
                             {"$set": {"status": "failed"}}
                         )
                 
-                time.sleep(60)  # Check every minute
+                # Check auto-deletes
+                auto_deletes = self.scheduled_broadcasts_col.find({
+                    "delete_at": {"$lte": now},
+                    "status": "pending",
+                    "type": "auto_delete"
+                })
+                
+                for delete_task in auto_deletes:
+                    try:
+                        success = execute_auto_delete(delete_task["channel_id"], delete_task["message_id"])
+                        status = "completed" if success else "failed"
+                        
+                        # Update status
+                        self.scheduled_broadcasts_col.update_one(
+                            {"_id": delete_task["_id"]},
+                            {"$set": {"status": status}}
+                        )
+                    except Exception as e:
+                        logger.error(f"Error executing auto delete: {e}")
+                        self.scheduled_broadcasts_col.update_one(
+                            {"_id": delete_task["_id"]},
+                            {"$set": {"status": "failed"}}
+                        )
+                
+                time.sleep(30)  # Check every 30 seconds for better responsiveness
             except Exception as e:
-                logger.error(f"Error in scheduled broadcast checker: {e}")
-                time.sleep(60)
+                logger.error(f"Error in scheduled tasks checker: {e}")
+                time.sleep(30)
 
     def check_expired_premium_users(self):
         """Check and update expired premium users"""
@@ -553,10 +580,7 @@ def send_message_to_channel(channel_data: Dict, message, broadcast_id: str, dele
             
             # Schedule auto delete if enabled
             if delete_time:
-                threading.Thread(
-                    target=advanced_auto_delete, 
-                    args=(channel_id, sent.message_id, delete_time)
-                ).start()
+                schedule_auto_delete(channel_id, sent.message_id, delete_time)
                 
     except Exception as e:
         result["error"] = str(e)
@@ -754,42 +778,60 @@ def delete_message_safe(chat_id: int, message_id: int):
     except Exception as e:
         logger.error(f"Error deleting message {message_id} from {chat_id}: {e}")
 
-def advanced_auto_delete(chat_id: int, msg_id: int, delete_time: int):
-    """Advanced auto delete with retry and logging"""
+def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
+    """Schedule auto delete with database persistence - works even after 2 days"""
     try:
-        logger.info(f"⏰ Auto delete scheduled: {msg_id} from {chat_id} in {delete_time} minutes")
-        time.sleep(delete_time * 60)
+        delete_at = datetime.now() + timedelta(minutes=delete_time)
         
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                result = bot.delete_message(chat_id, msg_id)
-                if result:
-                    logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
-                    broadcast_bot.update_analytics("auto_deletes")
-                    
-                    # Update message status
-                    broadcast_bot.broadcast_messages_col.update_one(
-                        {"channel_id": chat_id, "message_id": msg_id},
-                        {"$set": {"status": "deleted", "deleted_at": datetime.now()}}
-                    )
-                    break
-                else:
-                    if attempt < max_retries - 1:
-                        time.sleep(5)  # Wait before retry
-                        continue
-                    else:
-                        logger.warning(f"⚠️ Failed to delete message {msg_id} from {chat_id} after {max_retries} attempts")
-                        
-            except Exception as e:
-                if attempt < max_retries - 1:
-                    logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
-                    time.sleep(5)
-                else:
-                    logger.error(f"❌ Auto delete failed for {chat_id} after {max_retries} attempts: {e}")
-                    
+        # Store in MongoDB for persistence across bot restarts
+        auto_delete_data = {
+            "channel_id": chat_id,
+            "message_id": msg_id,
+            "delete_at": delete_at,
+            "created_at": datetime.now(),
+            "status": "pending"
+        }
+        
+        # Use scheduled_broadcasts collection for simplicity
+        broadcast_bot.scheduled_broadcasts_col.insert_one({
+            **auto_delete_data,
+            "type": "auto_delete"
+        })
+        
+        logger.info(f"⏰ Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        
     except Exception as e:
-        logger.error(f"❌ Auto delete function error: {e}")
+        logger.error(f"❌ Error scheduling auto delete: {e}")
+
+def execute_auto_delete(chat_id: int, msg_id: int):
+    """Execute auto delete with retry logic"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            result = bot.delete_message(chat_id, msg_id)
+            if result:
+                logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+                broadcast_bot.update_analytics("auto_deletes")
+                
+                # Update message status
+                broadcast_bot.broadcast_messages_col.update_one(
+                    {"channel_id": chat_id, "message_id": msg_id},
+                    {"$set": {"status": "deleted", "deleted_at": datetime.now()}}
+                )
+                return True
+            else:
+                if attempt < max_retries - 1:
+                    time.sleep(2)
+                    continue
+                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
+                time.sleep(2)
+            else:
+                logger.error(f"❌ Auto delete failed for {chat_id}: {e}")
+                
+    return False
 
 def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: Optional[int], stop_flag: Dict[str, bool]):
     """Advanced auto repost with enhanced features"""
@@ -872,10 +914,7 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                         # Schedule auto delete if enabled
                         if delete_time:
                             logger.info(f"🔄 Scheduling auto delete for {channel_id} in {delete_time} minutes")
-                            threading.Thread(
-                                target=advanced_auto_delete, 
-                                args=(channel_id, sent.message_id, delete_time)
-                            ).start()
+                            schedule_auto_delete(channel_id, sent.message_id, delete_time)
                     else:
                         failed_count += 1
                         logger.error(f"🔄 ❌ Failed to repost to {channel_id} - sent is None")
@@ -1389,21 +1428,26 @@ def callback_handler(call):
             state["step"] = "ask_autodelete_time"
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
-                types.InlineKeyboardButton("🗑 5m", callback_data="delete_5"),
-                types.InlineKeyboardButton("🗑 10m", callback_data="delete_10"),
-                types.InlineKeyboardButton("🗑 15m", callback_data="delete_15"),
-                types.InlineKeyboardButton("🗑 30m", callback_data="delete_30"),
-                types.InlineKeyboardButton("🗑 1h", callback_data="delete_60"),
-                types.InlineKeyboardButton("🗑 2h", callback_data="delete_120"),
-                types.InlineKeyboardButton("🗑 6h", callback_data="delete_360"),
-                types.InlineKeyboardButton("🗑 12h", callback_data="delete_720"),
-                types.InlineKeyboardButton("🗑 24h", callback_data="delete_1440"),
-                types.InlineKeyboardButton("⏱ Custom Time", callback_data="delete_custom"),
+                types.InlineKeyboardButton("⚡ 5 min", callback_data="delete_5"),
+                types.InlineKeyboardButton("🔟 10 min", callback_data="delete_10"),
+                types.InlineKeyboardButton("🕒 30 min", callback_data="delete_30"),
+                types.InlineKeyboardButton("⏰ 1 hour", callback_data="delete_60"),
+                types.InlineKeyboardButton("🕕 6 hours", callback_data="delete_360"),
+                types.InlineKeyboardButton("🌙 12 hours", callback_data="delete_720"),
+                types.InlineKeyboardButton("📅 1 day", callback_data="delete_1440"),
+                types.InlineKeyboardButton("📆 2 days", callback_data="delete_2880"),
+                types.InlineKeyboardButton("🗓️ 7 days", callback_data="delete_10080"),
+                types.InlineKeyboardButton("⏱️ Custom", callback_data="delete_custom"),
             )
-            sent_msg = bot.send_message(user_id, "🗑 Choose delete time:", reply_markup=markup)
-            # Auto-delete delete time selection after 60 seconds
+            sent_msg = bot.send_message(
+                user_id, 
+                "🗑️ **Choose Auto Delete Time**\n\n💡 Messages will be automatically deleted after broadcasting\n\n⚡ Quick cleanup for temporary content\n📅 Long-term scheduling (works even after 2+ days!)", 
+                reply_markup=markup, 
+                parse_mode="Markdown"
+            )
+            # Auto-delete this message after 2 minutes  
             if sent_msg:
-                threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+                threading.Timer(120, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             
         elif call.data == "delete_no":
             state["delete_time"] = None
