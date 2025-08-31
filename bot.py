@@ -962,62 +962,6 @@ def start_cmd(message):
         message.from_user.last_name
     )
     
-    # Check if user is premium or admin
-    if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
-        premium_text = f"""
-🔒 **Premium Required!** ⚡
-
-🚫 **Access Denied** - This bot is only for Premium users.
-
-💎 **Premium Features:**
-• 📢 **Unlimited Broadcasts**
-• ⚡ **Auto Repost & Delete**
-• 📋 **Bulk Channel Management**
-• 📊 **Advanced Analytics**
-• 🎯 **Priority Support**
-• ⏱ **Custom Auto Delete Times**
-• 🔢 **100+ Channels Support**
-• 🧹 **Auto Cleanup System**
-• 🛑 **Instant Stop All**
-
-💰 **Premium Plans:**
-• **1 Month:** ₹299
-• **3 Months:** ₹799
-• **6 Months:** ₹1499
-• **1 Year:** ₹2499
-
-👑 **Owner Only Activation:**
-• Only the bot owner can activate premium
-• Contact owner directly for activation
-• No self-activation allowed
-
-📞 **Contact Owner:** @{OWNER_ID}
-
-🔑 **Your User ID:** `{user_id}`
-
-⚠️ **Important:** Send your ID to owner for premium activation!
-        """
-        
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        markup.add(
-            types.InlineKeyboardButton("💎 Get Premium", callback_data="get_premium"),
-            types.InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin"),
-        )
-        
-        try:
-            bot.send_photo(
-                message.chat.id,
-                "https://i.ibb.co/GQrGd0MV/a101f4b2bfa4.jpg",
-                caption=premium_text,
-                reply_markup=markup,
-                parse_mode="Markdown",
-            )
-        except Exception as e:
-            logger.error(f"Error sending premium message: {e}")
-            bot.send_message(message.chat.id, premium_text, reply_markup=markup, parse_mode="Markdown")
-        
-        return
-    
     if message.text.startswith("/test"):
         # Test if bot is working
         bot.send_message(
@@ -1253,8 +1197,73 @@ Choose an option:
         """
         bot.send_message(message.chat.id, cleanup_text, reply_markup=markup, parse_mode="Markdown")
         return
+    
+    # If user is using /start or /help without specific command, show main menu
+    # But only allow premium/admin users to access main menu features
+    if message.text.startswith("/start") or message.text.startswith("/help"):
+        # Check if user is premium or admin for main menu access
+        if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
+            premium_text = f"""
+🔒 **Premium Required!** ⚡
 
-    # Main menu
+🚫 **Access Denied** - This bot is only for Premium users.
+
+💎 **Premium Features:**
+• 📢 **Unlimited Broadcasts**
+• ⚡ **Auto Repost & Delete**
+• 📋 **Bulk Channel Management**
+• 📊 **Advanced Analytics**
+• 🎯 **Priority Support**
+• ⏱ **Custom Auto Delete Times**
+• 🔢 **100+ Channels Support**
+• 🧹 **Auto Cleanup System**
+• 🛑 **Instant Stop All**
+
+💰 **Premium Plans:**
+• **1 Month:** ₹299
+• **3 Months:** ₹799
+• **6 Months:** ₹1499
+• **1 Year:** ₹2499
+
+👑 **Owner Only Activation:**
+• Only the bot owner can activate premium
+• Contact owner directly for activation
+• No self-activation allowed
+
+📞 **Contact Owner:** @{OWNER_ID}
+
+🔑 **Your User ID:** `{user_id}`
+
+⚠️ **Important:** Send your ID to owner for premium activation!
+
+**💡 Available Commands (Free):**
+• `/id` - Get your user/channel ID
+• `/test` - Test bot functionality
+• `/stats` - View your statistics
+• `/premium` - View premium information
+            """
+            
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("💎 Get Premium", callback_data="get_premium"),
+                types.InlineKeyboardButton("📞 Contact Admin", callback_data="contact_admin"),
+            )
+            
+            try:
+                bot.send_photo(
+                    message.chat.id,
+                    "https://i.ibb.co/GQrGd0MV/a101f4b2bfa4.jpg",
+                    caption=premium_text,
+                    reply_markup=markup,
+                    parse_mode="Markdown",
+                )
+            except Exception as e:
+                logger.error(f"Error sending premium message: {e}")
+                bot.send_message(message.chat.id, premium_text, reply_markup=markup, parse_mode="Markdown")
+            
+            return
+
+    # Main menu (for premium/admin users)
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📢 BROADCAST", callback_data="broadcast"),
