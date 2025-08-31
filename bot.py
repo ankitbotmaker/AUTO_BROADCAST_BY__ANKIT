@@ -1097,7 +1097,8 @@ Contact admin to upgrade to Premium!
                 channel_id = channel_doc["channel_id"]
                 try:
                     # Check if bot is admin in this channel
-                    chat_member = bot.get_chat_member(channel_id, bot.get_me().id)
+                    bot_user = bot.get_me()
+                    chat_member = bot.get_chat_member(channel_id, bot_user.id)
                     if chat_member.status in ["administrator", "creator"]:
                         chat_info = bot.get_chat(channel_id)
                         admin_channels.append({
@@ -1263,26 +1264,15 @@ Choose an option:
             
             return
 
-    # Main menu (for premium/admin users)
+    # Main menu (for premium/admin users) - SIMPLIFIED
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📢 BROADCAST", callback_data="broadcast"),
         types.InlineKeyboardButton("➕ ADD CHANNEL", callback_data="add_channel"),
-        types.InlineKeyboardButton("📋 MY CHANNELS", callback_data="my_channels"),
-        types.InlineKeyboardButton("🔍 FIND CHANNELS", callback_data="find_channels"),
     )
     markup.add(
-        types.InlineKeyboardButton("📊 ANALYTICS", callback_data="user_analytics"),
-        types.InlineKeyboardButton("📅 SCHEDULE", callback_data="schedule_broadcast"),
-        types.InlineKeyboardButton("📜 HISTORY", callback_data="show_history"),
-        types.InlineKeyboardButton("⚙️ SETTINGS", callback_data="user_settings"),
-    )
-    markup.add(
-        types.InlineKeyboardButton("🧪 TEST BOT", callback_data="test_button"),
-        types.InlineKeyboardButton("⏹ STOP REPOST", callback_data="stop_repost"),
-        types.InlineKeyboardButton("🗑 STOP & DELETE", callback_data="stop_and_delete"),
-        types.InlineKeyboardButton("🛑 INSTANT STOP ALL", callback_data="instant_stop_all"),
-        types.InlineKeyboardButton("🧹 AUTO CLEANUP", callback_data="cleanup_menu"),
+        types.InlineKeyboardButton("📋 BULK ADD CHANNELS", callback_data="bulk_add_channels"),
+        types.InlineKeyboardButton("🛑 STOP ALL", callback_data="stop_all_broadcasts"),
     )
     
     if broadcast_bot.is_admin(message.chat.id):
@@ -2241,6 +2231,126 @@ Please help me with payment details and activation.
         elif call.data == "cleanup_cancel":
             bot.send_message(user_id, "❌ Cleanup operation cancelled.")
 
+        elif call.data == "bulk_add_channels":
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            markup.add(types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_bulk_add"))
+            
+            sent_msg = bot.send_message(
+                user_id,
+                "📋 **Bulk Add Channels**\n\n"
+                "Send channel IDs in this format:\n"
+                "```\n"
+                "-1001234567890\n"
+                "-1001234567891\n"
+                "-1001234567892\n"
+                "```\n\n"
+                "**OR** send Telegram links:\n"
+                "```\n"
+                "https://t.me/channel1\n"
+                "@channel2\n"
+                "t.me/channel3\n"
+                "```\n\n"
+                "**💡 One per line or comma separated**",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+            
+            bot_state.broadcast_state[user_id] = {"step": "bulk_add_waiting"}
+            
+            # Auto-delete instruction after 2 minutes
+            if sent_msg:
+                threading.Timer(120, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+
+        elif call.data == "cancel_bulk_add":
+            if user_id in bot_state.broadcast_state:
+                del bot_state.broadcast_state[user_id]
+            bot.send_message(user_id, "❌ Bulk add operation cancelled.")
+
+        elif call.data == "stop_all_broadcasts":
+            # Stop all broadcasts and delete all messages for this user
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("✅ Yes, Stop & Delete All", callback_data="confirm_stop_all"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_stop_all"),
+            )
+            
+            bot.send_message(
+                user_id,
+                "🛑 **STOP ALL BROADCASTS**\n\n"
+                "**This will:**\n"
+                "• ⏹ Stop all running auto-reposts\n"
+                "• 🗑 Delete ALL broadcast messages from channels\n"
+                "• 🧹 Clear all scheduled tasks\n"
+                "• ❌ **Cannot be undone!**\n\n"
+                "**Are you sure?**",
+                reply_markup=markup,
+                parse_mode="Markdown"
+            )
+
+        elif call.data == "confirm_stop_all":
+            try:
+                # Stop all reposts for this user
+                if user_id in bot_state.active_reposts:
+                    bot_state.active_reposts[user_id]["stop"] = True
+                    
+                # Stop active broadcasts
+                if user_id in bot_state.active_broadcasts:
+                    del bot_state.active_broadcasts[user_id]
+                
+                # Get all broadcast messages for this user and delete them
+                broadcast_messages = list(broadcast_bot.broadcast_messages_col.find({"user_id": user_id}))
+                
+                status_msg = bot.send_message(
+                    user_id,
+                    f"🛑 **Stopping all broadcasts...**\n\n"
+                    f"📊 Found {len(broadcast_messages)} messages to delete\n"
+                    f"⏳ Processing...",
+                    parse_mode="Markdown"
+                )
+                
+                deleted_count = 0
+                failed_count = 0
+                
+                for msg_doc in broadcast_messages:
+                    try:
+                        bot.delete_message(msg_doc["channel_id"], msg_doc["message_id"])
+                        deleted_count += 1
+                        
+                        # Remove from database
+                        broadcast_bot.broadcast_messages_col.delete_one({"_id": msg_doc["_id"]})
+                        
+                    except Exception as e:
+                        failed_count += 1
+                        logger.error(f"Failed to delete message {msg_doc['message_id']} from {msg_doc['channel_id']}: {e}")
+                
+                # Clear scheduled tasks for this user
+                broadcast_bot.scheduled_broadcasts_col.delete_many({"user_id": user_id})
+                
+                # Update status
+                result_text = f"""
+🛑 **All Broadcasts Stopped!** ✅
+
+**📊 Results:**
+• ✅ **Deleted:** {deleted_count} messages
+• ❌ **Failed:** {failed_count} messages
+• 🧹 **Cleared:** All scheduled tasks
+• ⏹ **Stopped:** All active reposts
+
+**🎯 All operations completed!**
+                """
+                
+                bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
+                
+                # Auto-delete result after 30 seconds
+                threading.Timer(30, lambda: delete_message_safe(user_id, status_msg.message_id)).start()
+                
+            except Exception as e:
+                logger.error(f"Error in stop_all_broadcasts: {e}")
+                bot.send_message(user_id, "❌ Error stopping broadcasts. Please try again.")
+
+        elif call.data == "cancel_stop_all":
+            bot.send_message(user_id, "❌ Stop operation cancelled.")
+
         elif call.data == "cleanup_menu":
             if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
                 bot.answer_callback_query(call.id, "🔒 Premium Required!")
@@ -2279,11 +2389,8 @@ def handle_message(message):
     """Advanced message handler"""
     user_id = message.chat.id
     
-    if not (broadcast_bot.is_authorized(user_id) or 
-            broadcast_bot.is_premium(user_id) or 
-            broadcast_bot.is_admin(user_id)):
-        bot.send_message(user_id, "🚫 Access Denied! Contact admin.")
-        return
+    # Remove authorization check from message handler to allow broadcast flow
+    # Authorization is checked in callbacks and commands separately
 
     try:
         state = bot_state.broadcast_state.get(user_id)
@@ -2338,6 +2445,71 @@ def handle_message(message):
             # Auto-delete repost question after 60 seconds
             if sent_msg:
                 threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+            return
+        
+        elif state and state.get("step") == "bulk_add_waiting":
+            # Handle bulk channel addition
+            message_text = message.text or ""
+            
+            # Parse channel IDs and links
+            lines = message_text.replace(',', '\n').split('\n')
+            lines = [line.strip() for line in lines if line.strip()]
+            
+            added_channels = []
+            failed_channels = []
+            
+            for line in lines:
+                try:
+                    if line.startswith('-100') or line.startswith('-'):
+                        # Direct channel ID
+                        channel_id = int(line)
+                        try:
+                            chat_info = bot.get_chat(channel_id)
+                            broadcast_bot.add_channel(channel_id, user_id)
+                            added_channels.append(f"✅ {chat_info.title or 'Unknown'} (`{channel_id}`)")
+                        except Exception as e:
+                            failed_channels.append(f"❌ `{channel_id}` - {str(e)[:50]}")
+                    
+                    elif any(line.startswith(prefix) for prefix in ['https://t.me/', '@', 't.me/', 'https://telegram.me/']):
+                        # Telegram link
+                        channel_id = resolve_telegram_link(line)
+                        if channel_id:
+                            try:
+                                chat_info = bot.get_chat(channel_id)
+                                broadcast_bot.add_channel(channel_id, user_id)
+                                added_channels.append(f"✅ {chat_info.title or 'Unknown'} (`{channel_id}`)")
+                            except Exception as e:
+                                failed_channels.append(f"❌ `{line}` - {str(e)[:50]}")
+                        else:
+                            failed_channels.append(f"❌ `{line}` - Could not resolve")
+                    
+                except Exception as e:
+                    failed_channels.append(f"❌ `{line}` - {str(e)[:50]}")
+            
+            # Prepare result message
+            result_text = f"""
+📋 **Bulk Add Results**
+
+**✅ Successfully Added:** {len(added_channels)}
+**❌ Failed:** {len(failed_channels)}
+
+"""
+            
+            if added_channels:
+                result_text += "**✅ Added Channels:**\n" + "\n".join(added_channels[:10])
+                if len(added_channels) > 10:
+                    result_text += f"\n... and {len(added_channels) - 10} more"
+                result_text += "\n\n"
+            
+            if failed_channels:
+                result_text += "**❌ Failed Channels:**\n" + "\n".join(failed_channels[:5])
+                if len(failed_channels) > 5:
+                    result_text += f"\n... and {len(failed_channels) - 5} more"
+            
+            bot.send_message(user_id, result_text, parse_mode="Markdown")
+            
+            # Clear state
+            del bot_state.broadcast_state[user_id]
             return
 
         # Handle custom repost time input
