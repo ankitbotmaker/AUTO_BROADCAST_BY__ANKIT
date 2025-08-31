@@ -1090,8 +1090,10 @@ Contact admin to upgrade to Premium!
     if message.text.startswith("/cid"):
         # Get all channel IDs where bot is ADMIN
         try:
-            user_channels = broadcast_bot.channels_col.find({"user_id": user_id})
+            user_channels = list(broadcast_bot.channels_col.find({"user_id": user_id}))
             admin_channels = []
+            
+            logger.info(f"Found {len(user_channels)} channels for user {user_id}")
             
             for channel_doc in user_channels:
                 channel_id = channel_doc["channel_id"]
@@ -1108,6 +1110,9 @@ Contact admin to upgrade to Premium!
                             "type": chat_info.type,
                             "member_count": getattr(chat_info, 'member_count', 0)
                         })
+                        logger.info(f"Added admin channel: {chat_info.title} ({channel_id})")
+                    else:
+                        logger.info(f"Bot is not admin in channel {channel_id}: {chat_member.status}")
                 except Exception as e:
                     logger.error(f"Error checking admin status for {channel_id}: {e}")
                     continue
@@ -2789,7 +2794,7 @@ def handle_message(message):
         logger.error(f"Message handler error: {e}")
 
 if __name__ == "__main__":
-    logger.info("🚀 Advanced Broadcast Bot starting...")
+    logger.info("Advanced Broadcast Bot starting...")
     
     # Update analytics on startup
     broadcast_bot.update_analytics("active_users", 0)
