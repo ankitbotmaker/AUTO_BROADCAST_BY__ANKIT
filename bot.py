@@ -1312,6 +1312,16 @@ Contact admin to upgrade to Premium!
             """
         else:
             chat_title = message.chat.title or "Unknown"
+            username = message.chat.username or "None"
+            
+            # Check if bot is admin in this channel
+            try:
+                bot_user = bot.get_me()
+                chat_member = bot.get_chat_member(chat_id, bot_user.id)
+                admin_status = "✅ Admin" if chat_member.status in ['administrator', 'creator'] else "❌ Not Admin"
+            except Exception as e:
+                admin_status = "❓ Unknown"
+            
             id_text = f"""
 🆔 **Channel/Group Information**
 
@@ -1319,12 +1329,18 @@ Contact admin to upgrade to Premium!
 • **Channel ID:** `{chat_id}`
 • **Channel Name:** {chat_title}
 • **Chat Type:** {chat_type.title()}
-• **Username:** @{message.chat.username or "None"}
+• **Username:** @{username}
+• **Bot Status:** {admin_status}
 
 **💡 Usage:**
 • Use this ID to add channel to bot
 • Copy this ID for bulk channel addition
 • Share with admin for channel management
+
+**🔧 Quick Actions:**
+• Add bot as admin if not already
+• Use `/cid` to see all admin channels
+• Send channel links in broadcast messages
             """
         
         bot.send_message(message.chat.id, id_text, parse_mode="Markdown")
@@ -1332,23 +1348,63 @@ Contact admin to upgrade to Premium!
     
     if message.text.startswith("/cid"):
         # Show channel IDs where bot is admin
-        channels = broadcast_bot.get_all_channels(message.chat.id)
-        if channels:
-            # Only show channel IDs, not names
-            channel_ids = [str(ch["channel_id"]) for ch in channels]
+        try:
+            # Get bot info first
+            bot_user = bot.get_me()
+            logger.info(f"Bot user: {bot_user.username} (ID: {bot_user.id})")
             
-            # Chunk the output to avoid "message is too long" errors
-            chunk_size = 20
-            for i in range(0, len(channel_ids), chunk_size):
-                chunk = channel_ids[i:i + chunk_size]
-                chunk_text = "\n".join(chunk)
+            # Get all channels where bot is admin
+            admin_channels = []
+            
+            # Check channels from user's database first
+            user_channels = broadcast_bot.get_all_channels(message.chat.id)
+            for ch in user_channels:
+                try:
+                    chat_member = bot.get_chat_member(ch["channel_id"], bot_user.id)
+                    if chat_member.status in ['administrator', 'creator']:
+                        admin_channels.append({
+                            "channel_id": ch["channel_id"],
+                            "channel_name": ch.get("channel_name", "Unknown"),
+                            "username": ch.get("username", "private")
+                        })
+                except Exception as e:
+                    logger.warning(f"Could not check admin status for {ch['channel_id']}: {e}")
+            
+            # Also check some common channel patterns or let user know how to add more
+            if admin_channels:
+                # Show channel IDs where bot is admin
+                channel_ids = [str(ch["channel_id"]) for ch in admin_channels]
+                
+                # Chunk the output to avoid "message is too long" errors
+                chunk_size = 15
+                for i in range(0, len(channel_ids), chunk_size):
+                    chunk = channel_ids[i:i + chunk_size]
+                    chunk_text = "\n".join(chunk)
+                    
+                    # Show channel names too for better identification
+                    chunk_channels = admin_channels[i:i + chunk_size]
+                    channel_info = "\n".join([f"• {ch['channel_name']} (@{ch['username'] or 'private'}) - `{ch['channel_id']}`" for ch in chunk_channels])
+                    
+                    bot.send_message(
+                        message.chat.id, 
+                        f"📋 **Admin Channels (Part {i//chunk_size + 1}):**\n\n{channel_info}",
+                        parse_mode="Markdown"
+                    )
+            else:
                 bot.send_message(
                     message.chat.id, 
-                    f"📋 **Channel IDs (Part {i//chunk_size + 1}):**\n\n`{chunk_text}`",
+                    "❌ **No admin channels found!**\n\n"
+                    "**To add channels:**\n"
+                    "1. Add bot as admin to your channels\n"
+                    "2. Use `/id` in the channel to get channel ID\n"
+                    "3. Use 'Add Channel' button to add them\n"
+                    "4. Or send channel links in broadcast message\n\n"
+                    "**Note:** Bot must be admin in channels to broadcast there.",
                     parse_mode="Markdown"
                 )
-        else:
-            bot.send_message(message.chat.id, "❌ No channels found! Add channels first.")
+        except Exception as e:
+            logger.error(f"Error in /cid command: {e}")
+            bot.send_message(message.chat.id, f"❌ **Error:** {str(e)}")
         return
     
     if message.text.startswith("/cleanbot"):
@@ -2043,7 +2099,19 @@ def callback_handler(call):
 
         elif call.data == "add_single_channel":
             bot_state.broadcast_state[user_id] = {"step": "add_single_channel"}
-            bot.send_message(user_id, "➕ Send channel ID (e.g., -1001234567890):")
+            bot.send_message(
+                user_id, 
+                "➕ **Add Single Channel**\n\n"
+                "**Send one of the following:**\n\n"
+                "1️⃣ **Channel ID:** `-1001234567890`\n"
+                "2️⃣ **Channel Link:** `https://t.me/channelname`\n"
+                "3️⃣ **Channel Username:** `@channelname`\n\n"
+                "**💡 How to get Channel ID:**\n"
+                "• Use `/id` command in the channel\n"
+                "• Forward a message from the channel to me\n"
+                "• Or send the channel link/username",
+                parse_mode="Markdown"
+            )
 
         elif call.data == "add_bulk_channels":
             bot_state.broadcast_state[user_id] = {"step": "bulk_add_channels"}
@@ -2787,6 +2855,100 @@ def handle_message(message):
             # Auto-delete repost question after 60 seconds
             if sent_msg:
                 threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+            return
+
+        elif state and state.get("step") == "add_single_channel":
+            # Handle single channel addition
+            message_text = message.text or ""
+            
+            try:
+                added_channel = None
+                error_message = ""
+                
+                if message_text.startswith('-100') or message_text.startswith('-'):
+                    # Direct channel ID
+                    try:
+                        channel_id = int(message_text)
+                        channel_info = bot.get_chat(channel_id)
+                        if channel_info:
+                            added_channel = {
+                                "channel_id": channel_id,
+                                "channel_name": channel_info.title,
+                                "username": getattr(channel_info, 'username', None)
+                            }
+                        else:
+                            error_message = "❌ Channel not found!"
+                    except ValueError:
+                        error_message = "❌ Invalid channel ID format!"
+                    except Exception as e:
+                        error_message = f"❌ Error: {str(e)}"
+                        
+                elif message_text.startswith('@'):
+                    # Channel username
+                    try:
+                        username = message_text[1:]  # Remove @
+                        channel_info = bot.get_chat(f"@{username}")
+                        added_channel = {
+                            "channel_id": channel_info.id,
+                            "channel_name": channel_info.title,
+                            "username": username
+                        }
+                    except Exception as e:
+                        error_message = f"❌ Channel not found: {str(e)}"
+                        
+                elif 't.me/' in message_text:
+                    # Channel link
+                    try:
+                        resolved = resolve_telegram_link(message_text)
+                        if resolved:
+                            added_channel = resolved
+                        else:
+                            error_message = "❌ Invalid channel link!"
+                    except Exception as e:
+                        error_message = f"❌ Error resolving link: {str(e)}"
+                        
+                else:
+                    error_message = "❌ Invalid format! Send channel ID, username, or link."
+                
+                if added_channel:
+                    # Check if bot is admin
+                    try:
+                        bot_user = bot.get_me()
+                        chat_member = bot.get_chat_member(added_channel["channel_id"], bot_user.id)
+                        if chat_member.status not in ['administrator', 'creator']:
+                            error_message = "❌ Bot is not admin in this channel! Add bot as admin first."
+                            added_channel = None
+                    except Exception as e:
+                        error_message = f"❌ Cannot check admin status: {str(e)}"
+                        added_channel = None
+                
+                if added_channel:
+                    # Add to database
+                    broadcast_bot.add_channel(user_id, added_channel["channel_id"], added_channel["channel_name"], added_channel.get("username"))
+                    
+                    result_message = f"✅ **Channel Added Successfully!**\n\n"
+                    result_message += f"**📢 Channel:** {added_channel['channel_name']}\n"
+                    result_message += f"**🆔 ID:** `{added_channel['channel_id']}`\n"
+                    result_message += f"**👤 Username:** @{added_channel['username'] or 'private'}\n\n"
+                    result_message += "🎉 **Channel is ready for broadcasting!**"
+                    
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    markup.add(
+                        types.InlineKeyboardButton("➕ Add Another", callback_data="add_single_channel"),
+                        types.InlineKeyboardButton("📢 Start Broadcast", callback_data="broadcast"),
+                    )
+                    
+                    bot.send_message(user_id, result_message, reply_markup=markup, parse_mode="Markdown")
+                else:
+                    bot.send_message(user_id, f"❌ **Failed to add channel!**\n\n{error_message}")
+                
+                # Clear the state
+                bot_state.broadcast_state[user_id] = {}
+                
+            except Exception as e:
+                logger.error(f"Error in add_single_channel: {e}")
+                bot.send_message(user_id, f"❌ **Error occurred:** {str(e)}")
+                bot_state.broadcast_state[user_id] = {}
             return
 
         elif state and state.get("step") == "bulk_add_waiting":

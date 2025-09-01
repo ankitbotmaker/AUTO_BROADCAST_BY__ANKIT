@@ -8999,3 +8999,18 @@ requests.exceptions.ConnectionError: ('Connection aborted.', ConnectionResetErro
 2025-09-01 09:54:27,203 - bot - INFO - MongoDB connected successfully
 2025-09-01 09:54:27,302 - bot - INFO - Starting background tasks...
 2025-09-01 09:54:27,308 - bot - INFO - Background tasks started successfully
+2025-09-01 09:58:26,628 - __main__ - INFO - MongoDB connected successfully
+2025-09-01 09:58:26,855 - __main__ - INFO - Starting background tasks...
+2025-09-01 09:58:26,861 - __main__ - INFO - Background tasks started successfully
+2025-09-01 09:58:26,880 - __main__ - INFO - Advanced Broadcast Bot starting...
+2025-09-01 09:58:27,329 - __main__ - INFO - Analytics updated successfully
+2025-09-01 09:58:27,329 - __main__ - INFO - Starting locally with polling...
+2025-09-01 09:58:28,906 - __main__ - INFO - Webhook removed for local development
+2025-09-01 09:59:52,369 - __main__ - INFO - Callback received: add_channel from user 8121559051
+2025-09-01 09:59:52,372 - __main__ - INFO - Processing callback: add_channel for user 8121559051
+2025-09-01 10:01:22,994 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
+2025-09-01 10:01:22,996 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
+2025-09-01 10:02:07,847 - __main__ - INFO - Callback received: add_channel from user 8121559051
+2025-09-01 10:02:07,852 - __main__ - INFO - Processing callback: add_channel for user 8121559051
+2025-09-01 10:02:12,248 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
+2025-09-01 10:02:12,251 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
