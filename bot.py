@@ -450,7 +450,8 @@ class AdvancedBroadcastBot:
             logger.error(f"Error updating analytics: {e}")
 
     def check_scheduled_broadcasts(self):
-        """Check and execute scheduled broadcasts and auto-deletes"""
+        """Check and execute scheduled broadcasts and auto-deletes with enhanced monitoring"""
+        logger.info("🚀 Starting scheduled tasks checker...")
         while True:
             try:
                 now = datetime.now()
@@ -479,39 +480,50 @@ class AdvancedBroadcastBot:
                             {"$set": {"status": "failed"}}
                         )
                 
-                # Check auto-deletes
-                auto_deletes = self.scheduled_broadcasts_col.find({
+                # Check auto-deletes with enhanced processing
+                auto_deletes = list(self.scheduled_broadcasts_col.find({
                     "delete_at": {"$lte": now},
                     "status": "pending",
                     "type": "auto_delete"
-                })
+                }))
                 
-                auto_delete_count = len(list(auto_deletes))
-                if auto_delete_count > 0:
-                    logger.info(f"Found {auto_delete_count} auto delete tasks to process")
-                
-                auto_deletes = self.scheduled_broadcasts_col.find({
-                    "delete_at": {"$lte": now},
-                    "status": "pending",
-                    "type": "auto_delete"
-                })
-                
-                for delete_task in auto_deletes:
-                    try:
-                        success = execute_auto_delete(delete_task["channel_id"], delete_task["message_id"])
-                        status = "completed" if success else "failed"
-                        
-                        # Update status
-                        self.scheduled_broadcasts_col.update_one(
-                            {"_id": delete_task["_id"]},
-                            {"$set": {"status": status}}
-                        )
-                    except Exception as e:
-                        logger.error(f"Error executing auto delete: {e}")
-                        self.scheduled_broadcasts_col.update_one(
-                            {"_id": delete_task["_id"]},
-                            {"$set": {"status": "failed"}}
-                        )
+                if auto_deletes:
+                    logger.info(f"🔄 Processing {len(auto_deletes)} auto delete tasks...")
+                    
+                    for delete_task in auto_deletes:
+                        try:
+                            # Update attempt count
+                            self.scheduled_broadcasts_col.update_one(
+                                {"_id": delete_task["_id"]},
+                                {"$inc": {"attempts": 1}, "$set": {"last_attempt": now}}
+                            )
+                            
+                            success = execute_auto_delete(delete_task["channel_id"], delete_task["message_id"])
+                            
+                            if success:
+                                status = "completed"
+                                logger.info(f"✅ Auto delete completed for message {delete_task['message_id']}")
+                            else:
+                                # Check if we should retry
+                                attempts = delete_task.get("attempts", 0) + 1
+                                if attempts < 3:  # Max 3 attempts
+                                    status = "pending"
+                                    logger.warning(f"⚠️ Auto delete failed, will retry (attempt {attempts}/3)")
+                                else:
+                                    status = "failed"
+                                    logger.error(f"❌ Auto delete failed after {attempts} attempts")
+                            
+                            # Update status
+                            self.scheduled_broadcasts_col.update_one(
+                                {"_id": delete_task["_id"]},
+                                {"$set": {"status": status}}
+                            )
+                        except Exception as e:
+                            logger.error(f"❌ Error executing auto delete: {e}")
+                            self.scheduled_broadcasts_col.update_one(
+                                {"_id": delete_task["_id"]},
+                                {"$set": {"status": "failed", "error": str(e)}}
+                            )
                 
                 # Clean up old completed/failed auto delete tasks (older than 7 days)
                 cleanup_date = now - timedelta(days=7)
@@ -521,11 +533,11 @@ class AdvancedBroadcastBot:
                     "status": {"$in": ["completed", "failed", "already_deleted"]}
                 })
                 if cleanup_result.deleted_count > 0:
-                    logger.info(f"Cleaned up {cleanup_result.deleted_count} old auto delete tasks")
+                    logger.info(f"🧹 Cleaned up {cleanup_result.deleted_count} old auto delete tasks")
                 
-                time.sleep(30)  # Check every 30 seconds for better responsiveness
+                time.sleep(15)  # Check every 15 seconds for better responsiveness
             except Exception as e:
-                logger.error(f"Error in scheduled tasks checker: {e}")
+                logger.error(f"❌ Error in scheduled tasks checker: {e}")
                 time.sleep(30)
 
     def check_expired_premium_users(self):
@@ -922,7 +934,7 @@ def delete_message_safe(chat_id: int, message_id: int):
         logger.error(f"Error deleting message {message_id} from {chat_id}: {e}")
 
 def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
-    """Schedule auto delete with database persistence - works even after 2 days"""
+    """Schedule auto delete with enhanced monitoring and immediate execution for short times"""
     try:
         delete_at = datetime.now() + timedelta(minutes=delete_time)
         
@@ -932,7 +944,11 @@ def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
             "message_id": msg_id,
             "delete_at": delete_at,
             "created_at": datetime.now(),
-            "status": "pending"
+            "status": "pending",
+            "delete_time_minutes": delete_time,
+            "attempts": 0,
+            "last_attempt": None,
+            "error_count": 0
         }
         
         # Use scheduled_broadcasts collection for simplicity
@@ -941,47 +957,86 @@ def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
             "type": "auto_delete"
         })
         
-        logger.info(f"Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"✅ Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        # For very short times (5 minutes or less), also set immediate timer
+        if delete_time <= 5:
+            threading.Timer(delete_time * 60, lambda: execute_auto_delete(chat_id, msg_id)).start()
+            logger.info(f"⚡ Immediate timer set for {delete_time} minute auto delete")
         
     except Exception as e:
-        logger.error(f"Error scheduling auto delete: {e}")
+        logger.error(f"❌ Error scheduling auto delete: {e}")
 
 def execute_auto_delete(chat_id: int, msg_id: int):
-    """Execute auto delete with retry logic"""
-    max_retries = 3
+    """Execute auto delete with enhanced retry logic and better error handling"""
+    max_retries = 5
+    retry_delays = [1, 2, 3, 5, 8]  # Progressive delays
+    
     for attempt in range(max_retries):
         try:
+            logger.info(f"Auto delete attempt {attempt + 1}/{max_retries} for message {msg_id} from {chat_id}")
+            
             result = bot.delete_message(chat_id, msg_id)
             if result:
-                logger.info(f"Auto deleted message {msg_id} from {chat_id}")
+                logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
                 broadcast_bot.update_analytics("auto_deletes")
                 
                 # Update message status
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
-                    {"$set": {"status": "deleted", "deleted_at": datetime.now()}}
+                    {"$set": {"status": "deleted", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
                 )
                 return True
             else:
+                logger.warning(f"Delete returned False for message {msg_id} from {chat_id}")
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    time.sleep(retry_delays[attempt])
                     continue
                 
         except Exception as e:
             error_msg = str(e).lower()
+            
+            # Handle different error types
             if "message to delete not found" in error_msg or "message not found" in error_msg:
-                logger.info(f"Message {msg_id} from {chat_id} already deleted or not found")
+                logger.info(f"✅ Message {msg_id} from {chat_id} already deleted or not found")
                 # Update message status as already deleted
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
-                    {"$set": {"status": "already_deleted", "deleted_at": datetime.now()}}
+                    {"$set": {"status": "already_deleted", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
                 )
                 return True  # Consider this a success since the goal is achieved
+                
+            elif "chat not found" in error_msg or "channel not found" in error_msg:
+                logger.warning(f"❌ Channel {chat_id} not found for message {msg_id}")
+                broadcast_bot.broadcast_messages_col.update_one(
+                    {"channel_id": chat_id, "message_id": msg_id},
+                    {"$set": {"status": "channel_not_found", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
+                )
+                return False  # Don't retry for channel not found
+                
+            elif "not enough rights" in error_msg or "forbidden" in error_msg:
+                logger.warning(f"❌ No permission to delete message {msg_id} from {chat_id}")
+                broadcast_bot.broadcast_messages_col.update_one(
+                    {"channel_id": chat_id, "message_id": msg_id},
+                    {"$set": {"status": "no_permission", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
+                )
+                return False  # Don't retry for permission issues
+                
+            elif "flood" in error_msg or "too many requests" in error_msg:
+                logger.warning(f"⚠️ Rate limited for message {msg_id} from {chat_id}, waiting longer...")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delays[attempt] * 2)  # Double delay for rate limits
+                    continue
+                    
             elif attempt < max_retries - 1:
-                logger.warning(f"Delete attempt {attempt + 1} failed: {e}")
-                time.sleep(2)
+                logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
+                time.sleep(retry_delays[attempt])
             else:
-                logger.error(f"Auto delete failed for {chat_id}: {e}")
+                logger.error(f"❌ Auto delete failed for {chat_id}: {e}")
+                broadcast_bot.broadcast_messages_col.update_one(
+                    {"channel_id": chat_id, "message_id": msg_id},
+                    {"$set": {"status": "delete_failed", "deleted_at": datetime.now(), "delete_attempts": attempt + 1, "error": str(e)}}
+                )
                 
     return False
 
@@ -2558,7 +2613,7 @@ def callback_handler(call):
         logger.error(f"Callback error: {e}")
 
 def start_broadcast_flow_from_message(user_id: int, message):
-    """Start broadcast flow directly from an incoming message (text/media with caption)."""
+    """Start broadcast flow directly from an incoming message with improved UI."""
     logger.info(f"Starting broadcast flow for user {user_id}, content_type: {message.content_type}")
     
     state = bot_state.broadcast_state.get(user_id, {})
@@ -2580,7 +2635,7 @@ def start_broadcast_flow_from_message(user_id: int, message):
     state["format_type"] = "plain"
     bot_state.broadcast_state[user_id] = state
 
-    # Create consolidated message with all options
+    # Create improved message with better formatting
     message_text = "📢 **Broadcast Configuration**\n\n"
     
     if added_channels:
@@ -2600,7 +2655,7 @@ def start_broadcast_flow_from_message(user_id: int, message):
 
     message_text += "⚙️ **Configure your broadcast:**\n\n"
 
-    # Create separate sections for auto repost and auto delete
+    # Create improved markup with better organization
     markup = types.InlineKeyboardMarkup(row_width=2)
     
     # 🔄 AUTO REPOST SECTION
@@ -2645,7 +2700,7 @@ def start_broadcast_flow_from_message(user_id: int, message):
     # Separator
     markup.add(types.InlineKeyboardButton("━━━━━━━━━━━━━━━━", callback_data="separator"))
     
-    # Skip options
+    # Quick actions
     markup.row(
         types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
         types.InlineKeyboardButton("❌ No Delete", callback_data="delete_no")
@@ -2669,37 +2724,19 @@ def start_broadcast_flow_from_message(user_id: int, message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_message(message):
-    """Advanced message handler"""
+    """Advanced message handler with improved broadcast flow"""
     user_id = message.chat.id
     
-    # Remove authorization check from message handler to allow broadcast flow
-    # Authorization is checked in callbacks and commands separately
-
     try:
         state = bot_state.broadcast_state.get(user_id)
 
         # Auto-start broadcast flow if user sends text/media with caption in private chat
         if not state and message.chat.type == 'private' and (getattr(message, 'text', None) or getattr(message, 'caption', None) or message.content_type in ["photo", "video", "document"]):
-            logger.info(f"Auto-starting broadcast flow for user {user_id}, content_type: {message.content_type}, has_text: {bool(getattr(message, 'text', None))}, has_caption: {bool(getattr(message, 'caption', None))}")
+            logger.info(f"Auto-starting broadcast flow for user {user_id}, content_type: {message.content_type}")
             start_broadcast_flow_from_message(user_id, message)
             return
 
-        # Fallback: if no state and in private chat, start broadcast flow anyway
-        if not state and message.chat.type == 'private':
-            logger.info(f"Fallback: Starting broadcast flow for user {user_id} in private chat")
-            start_broadcast_flow_from_message(user_id, message)
-            return
-        
-        # Ultimate fallback: if nothing else worked, send a simple response
-        if message.chat.type == 'private' and not state:
-            logger.info(f"Ultimate fallback: Sending simple response to user {user_id}")
-            try:
-                bot.send_message(user_id, "📢 Send your broadcast message:")
-                bot_state.broadcast_state[user_id] = {"step": "waiting_msg"}
-            except Exception as e:
-                logger.error(f"Failed to send fallback message: {e}")
-            return
-
+        # Handle broadcast state
         if state and state.get("step") == "waiting_msg":
             state["message"] = message
             state["step"] = "ask_repost"
@@ -2716,7 +2753,7 @@ def handle_message(message):
             state["formatted_text"] = original_text
             state["format_type"] = "plain"
             
-            # Go directly to repost question
+            # Go directly to repost question with improved UI
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
                 types.InlineKeyboardButton("🔄 Yes, Auto Repost", callback_data="repost_yes"),
@@ -2768,331 +2805,62 @@ def handle_message(message):
                     if line.startswith('-100') or line.startswith('-'):
                         # Direct channel ID
                         channel_id = int(line)
-                        try:
-                            chat_info = bot.get_chat(channel_id)
-                            broadcast_bot.add_channel(channel_id, user_id)
-                            added_channels.append(f"✅ {chat_info.title or 'Unknown'} (`{channel_id}`)")
-                        except Exception as e:
-                            failed_channels.append(f"❌ `{channel_id}` - {str(e)[:50]}")
-                    
-                    elif any(line.startswith(prefix) for prefix in ['https://t.me/', '@', 't.me/', 'https://telegram.me/']):
-                        # Telegram link
-                        channel_id = resolve_telegram_link(line)
-                        if channel_id:
-                            try:
-                                chat_info = bot.get_chat(channel_id)
-                                broadcast_bot.add_channel(channel_id, user_id)
-                                added_channels.append(f"✅ {chat_info.title or 'Unknown'} (`{channel_id}`)")
-                            except Exception as e:
-                                failed_channels.append(f"❌ `{line}` - {str(e)[:50]}")
+                        channel_info = bot.get_chat(channel_id)
+                        if channel_info:
+                            added_channels.append({
+                                "channel_id": channel_id,
+                                "channel_name": channel_info.title,
+                                "username": getattr(channel_info, 'username', None)
+                            })
+                    else:
+                        # Try to resolve as link
+                        resolved = resolve_telegram_link(line)
+                        if resolved:
+                            added_channels.append(resolved)
                         else:
-                            failed_channels.append(f"❌ `{line}` - Could not resolve")
-                    
+                            failed_channels.append(line)
                 except Exception as e:
-                    failed_channels.append(f"❌ `{line}` - {str(e)[:50]}")
+                    logger.warning(f"Failed to add channel {line}: {e}")
+                    failed_channels.append(line)
             
-            # Prepare result message
-            result_text = f"""
-📋 **Bulk Add Results**
-
-**✅ Successfully Added:** {len(added_channels)}
-**❌ Failed:** {len(failed_channels)}
-
-"""
+            # Add channels to database
+            for ch in added_channels:
+                broadcast_bot.add_channel(user_id, ch["channel_id"], ch["channel_name"], ch.get("username"))
             
+            # Send result
+            result_message = f"✅ **Bulk Channel Addition Complete!**\n\n"
             if added_channels:
-                result_text += "**✅ Added Channels:**\n" + "\n".join(added_channels[:10])
-                if len(added_channels) > 10:
-                    result_text += f"\n... and {len(added_channels) - 10} more"
-                result_text += "\n\n"
+                channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
+                result_message += f"✅ **Added {len(added_channels)} channels:**\n{channel_list}\n\n"
             
             if failed_channels:
-                result_text += "**❌ Failed Channels:**\n" + "\n".join(failed_channels[:5])
-                if len(failed_channels) > 5:
-                    result_text += f"\n... and {len(failed_channels) - 5} more"
+                failed_list = "\n".join([f"• `{ch}`" for ch in failed_channels])
+                result_message += f"❌ **Failed to add {len(failed_channels)} channels:**\n{failed_list}\n\n"
             
-            bot.send_message(user_id, result_text, parse_mode="Markdown")
+            result_message += "🔄 **Continue with broadcast setup:**"
             
-            # Clear state
-            del bot_state.broadcast_state[user_id]
-            return
-
-        # Handle custom repost time input
-        if state and state.get("step") == "ask_repost_custom_time":
-            try:
-                minutes = int(message.text.strip())
-                if minutes < 1:
-                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
-                    return
-                if minutes > 43200:  # 30 days
-                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum repost time is 30 days (43200 minutes).")
-                    return
-                    
-                state["repost_time"] = minutes
-                state["step"] = "repost_time_selected"
-                bot_state.broadcast_state[user_id] = state
-                
-                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
-                bot.send_message(
-                    user_id,
-                    f"✅ **Auto repost set to {time_display}**\n\n🗑 Enable Auto Delete?",
-                    parse_mode="Markdown"
-                )
-                
-                # Ask for auto delete
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-                )
-                bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
-            return
-
-        # Handle custom auto delete time input
-        if state and state.get("step") == "ask_delete_custom_time":
-            try:
-                minutes = int(message.text.strip())
-                if minutes < 1:
-                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
-                    return
-                if minutes > 43200:  # 30 days
-                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum delete time is 30 days (43200 minutes).")
-                    return
-
-                state["delete_time"] = minutes
-                state["step"] = "delete_time_selected"
-                bot_state.broadcast_state[user_id] = state
-                
-                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
-                bot.send_message(
-                    user_id,
-                    f"✅ **Auto delete set to {time_display}**\n\n⏳ Starting broadcast...",
-                    parse_mode="Markdown"
-                )
-                finish_advanced_broadcast(user_id)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
-            return
-
-        # Handle custom repost time input (legacy)
-        if state and state.get("step") == "ask_repost_time":
-            try:
-                minutes = int(message.text.strip())
-                if minutes < 1:
-                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
-                    return
-                if minutes > 43200:  # 30 days
-                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum repost time is 30 days (43200 minutes).")
-                    return
-                    
-                state["repost_time"] = minutes
-                
-                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
-                bot.send_message(
-                    user_id,
-                    f"✅ **Auto repost set to {time_display}**\n\n🗑 Enable Auto Delete?",
-                    parse_mode="Markdown"
-                )
-                
-                # Ask for auto delete
-                state["step"] = "ask_autodelete"
-                markup = types.InlineKeyboardMarkup(row_width=2)
-                markup.add(
-                    types.InlineKeyboardButton("✅ Yes", callback_data="delete_yes"),
-                    types.InlineKeyboardButton("❌ No", callback_data="delete_no"),
-                )
-                bot.send_message(user_id, "🗑 Enable Auto Delete?", reply_markup=markup)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
-            return
-
-        # Handle custom auto delete time input (legacy)
-        if state and state.get("step") == "ask_autodelete_time":
-            try:
-                minutes = int(message.text.strip())
-                if minutes < 1:
-                    bot.send_message(user_id, "⚠️ **Invalid Time**\n\nPlease enter a number greater than 0.")
-                    return
-                if minutes > 43200:  # 30 days
-                    bot.send_message(user_id, "⚠️ **Time Too Long**\n\nMaximum delete time is 30 days (43200 minutes).")
-                    return
-
-                state["delete_time"] = minutes
-                
-                time_display = f"{minutes} minutes" if minutes < 60 else f"{minutes//60} hours {minutes%60} minutes" if minutes % 60 else f"{minutes//60} hours"
-                bot.send_message(
-                    user_id,
-                    f"✅ **Auto delete set to {time_display}**\n\n⏳ Starting broadcast...",
-                    parse_mode="Markdown"
-                )
-                finish_advanced_broadcast(user_id)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ **Invalid Input**\n\nPlease enter a valid number (minutes).")
-            return
-
-        # Handle admin premium management
-        if state and state.get("step") == "waiting_user_id" and broadcast_bot.is_admin(user_id):
-            try:
-                bot.send_message(user_id, "ℹ️ Premium mode disabled. No activation required.")
-                bot_state.broadcast_state.pop(user_id, None)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ Invalid user ID. Please enter a valid number.")
-            return
-
-        elif state and state.get("step") == "waiting_user_id_remove" and broadcast_bot.is_admin(user_id):
-            try:
-                bot.send_message(user_id, "ℹ️ Premium mode disabled. No removal needed.")
-                bot_state.broadcast_state.pop(user_id, None)
-            except ValueError:
-                bot.send_message(user_id, "⚠️ Invalid user ID. Please enter a valid number.")
-            return
-
-        # Handle channel ID input and Telegram links
-        if message.text:
-            state = bot_state.broadcast_state.get(user_id, {})
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔄 Continue Setup", callback_data="continue_setup"),
+                types.InlineKeyboardButton("❌ Cancel", callback_data="cancel_broadcast"),
+            )
             
-            # Check if user is in bulk add mode
-            if state.get("step") == "bulk_add_channels":
-                # Handle bulk channel addition
-                try:
-                    # Parse channel IDs and links from different formats
-                    channel_text = message.text.strip()
-                    channel_ids = []
-                    
-                    # Extract Telegram links first
-                    telegram_links = extract_telegram_links(channel_text)
-                    for link in telegram_links:
-                        channel_id = resolve_telegram_link(link)
-                        if channel_id:
-                            channel_ids.append(str(channel_id))
-                    
-                    # Split by newlines, commas, or spaces for direct IDs
-                    if '\n' in channel_text:
-                        # Format: -1001234567890\n-1001234567891
-                        direct_ids = [line.strip() for line in channel_text.split('\n') if line.strip().startswith('-100')]
-                        channel_ids.extend(direct_ids)
-                    elif ',' in channel_text:
-                        # Format: -1001234567890, -1001234567891
-                        direct_ids = [ch.strip() for ch in channel_text.split(',') if ch.strip().startswith('-100')]
-                        channel_ids.extend(direct_ids)
-                    elif channel_text.startswith('-100'):
-                        # Single channel ID
-                        channel_ids.append(channel_text)
-                    
-                    # Remove duplicates
-                    channel_ids = list(set(channel_ids))
-                    
-                    # Limit to 100 channels
-                    if len(channel_ids) > 100:
-                        bot.send_message(user_id, "⚠️ **Too Many Channels**\n\nMaximum 100 channels allowed at once.")
-                        return
-                    
-                    # Process channels
-                    success_count = 0
-                    failed_count = 0
-                    already_exists = 0
-                    failed_channels = []
-                    
-                    status_msg = bot.send_message(
-                        user_id,
-                        f"📋 **Adding {len(channel_ids)} channels...**\n\n⏳ Please wait...",
-                        parse_mode="Markdown"
-                    )
-                    
-                    for i, ch_id_str in enumerate(channel_ids):
-                        try:
-                            ch_id = int(ch_id_str)
-                            chat_info = bot.get_chat(ch_id)
-                            
-                            if broadcast_bot.add_channel(ch_id, user_id):
-                                success_count += 1
-                            else:
-                                already_exists += 1
-                                
-                        except Exception as e:
-                            failed_count += 1
-                            failed_channels.append(ch_id_str)
-                        
-                        # Update progress every 10 channels
-                        if (i + 1) % 10 == 0:
-                            try:
-                                bot.edit_message_text(
-                                    f"📋 **Adding Channels Progress**\n\n"
-                                    f"✅ Added: {success_count}\n"
-                                    f"⚠️ Already Exists: {already_exists}\n"
-                                    f"❌ Failed: {failed_count}\n"
-                                    f"📊 Progress: {i + 1}/{len(channel_ids)}",
-                                    user_id, status_msg.message_id,
-                                    parse_mode="Markdown"
-                                )
-                            except:
-                                pass
-                    
-                    # Final result
-                    result_text = f"""
-✅ **Bulk Channel Addition Completed!**
+            bot.send_message(user_id, result_message, reply_markup=markup, parse_mode="Markdown")
+            state["step"] = "setup_complete"
+            return
 
-📊 **Results:**
-• ✅ Successfully Added: `{success_count}`
-• ⚠️ Already Exists: `{already_exists}`
-• ❌ Failed: `{failed_count}`
-• 📋 Total Processed: `{len(channel_ids)}`
-
-🕐 **Time:** `{datetime.now().strftime('%H:%M:%S')}`
-                    """
-                    
-                    if failed_channels:
-                        failed_list = ', '.join(failed_channels[:5])
-                        if len(failed_channels) > 5:
-                            failed_list += f" and {len(failed_channels) - 5} more"
-                        result_text += f"\n❌ **Failed Channels:**\n`{failed_list}`"
-                    
-                    try:
-                        bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
-                    except:
-                        bot.send_message(user_id, result_text, parse_mode="Markdown")
-                    
-                    # Clear bulk add state
-                    bot_state.broadcast_state.pop(user_id, None)
-                except Exception as e:
-                    bot.send_message(user_id, f"❌ **Bulk Add Error:** {e}")
-                    bot_state.broadcast_state.pop(user_id, None)
-                
-            else:
-                # Handle single channel addition (ID or link)
-                try:
-                    # Check if it's a Telegram link
-                    telegram_links = extract_telegram_links(message.text)
-                    if telegram_links:
-                        # Handle as link
-                        link = telegram_links[0]
-                        channel_id = resolve_telegram_link(link)
-                        if channel_id:
-                            chat_info = bot.get_chat(channel_id)
-                            if broadcast_bot.add_channel(channel_id, user_id):
-                                bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added from link!", parse_mode="Markdown")
-                            else:
-                                bot.send_message(user_id, f"⚠️ Channel already exists!")
-                        else:
-                            bot.send_message(user_id, f"❌ Could not resolve link: {link}")
-                    elif message.text.startswith('-100'):
-                        # Handle as direct channel ID
-                        ch_id = int(message.text.strip())
-                        chat_info = bot.get_chat(ch_id)
-                        
-                        if broadcast_bot.add_channel(ch_id, user_id):
-                            bot.send_message(user_id, f"✅ Channel **{chat_info.title}** added!", parse_mode="Markdown")
-                        else:
-                            bot.send_message(user_id, f"⚠️ Channel already exists!")
-                    else:
-                        bot.send_message(user_id, f"❌ Invalid format! Use channel ID (-100...) or Telegram link")
-                except Exception as e:
-                    bot.send_message(user_id, f"❌ Error: {e}")
+        # If no state and in private chat, start broadcast flow
+        if message.chat.type == 'private' and not state:
+            logger.info(f"Starting broadcast flow for user {user_id} in private chat")
+            start_broadcast_flow_from_message(user_id, message)
+            return
 
     except Exception as e:
-        logger.error(f"Message handler error: {e}")
+        logger.error(f"Error in handle_message: {e}")
+        try:
+            bot.send_message(user_id, "❌ **Error occurred!**\n\nPlease try again or contact support.")
+        except:
+            pass
 
 def track_bot_message(user_id: int, message_id: int):
     """Track bot messages for later deletion"""
