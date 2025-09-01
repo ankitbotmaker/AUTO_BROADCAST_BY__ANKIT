@@ -451,7 +451,7 @@ class AdvancedBroadcastBot:
 
     def check_scheduled_broadcasts(self):
         """Check and execute scheduled broadcasts and auto-deletes with enhanced monitoring"""
-        logger.info("🚀 Starting scheduled tasks checker...")
+        logger.info("Starting scheduled tasks checker...")
         while True:
             try:
                 now = datetime.now()
@@ -488,7 +488,7 @@ class AdvancedBroadcastBot:
                 }))
                 
                 if auto_deletes:
-                    logger.info(f"🔄 Processing {len(auto_deletes)} auto delete tasks...")
+                    logger.info(f"Processing {len(auto_deletes)} auto delete tasks...")
                     
                     for delete_task in auto_deletes:
                         try:
@@ -502,16 +502,16 @@ class AdvancedBroadcastBot:
                             
                             if success:
                                 status = "completed"
-                                logger.info(f"✅ Auto delete completed for message {delete_task['message_id']}")
+                                logger.info(f"Auto delete completed for message {delete_task['message_id']}")
                             else:
                                 # Check if we should retry
                                 attempts = delete_task.get("attempts", 0) + 1
                                 if attempts < 3:  # Max 3 attempts
                                     status = "pending"
-                                    logger.warning(f"⚠️ Auto delete failed, will retry (attempt {attempts}/3)")
+                                    logger.warning(f"Auto delete failed, will retry (attempt {attempts}/3)")
                                 else:
                                     status = "failed"
-                                    logger.error(f"❌ Auto delete failed after {attempts} attempts")
+                                    logger.error(f"Auto delete failed after {attempts} attempts")
                             
                             # Update status
                             self.scheduled_broadcasts_col.update_one(
@@ -519,7 +519,7 @@ class AdvancedBroadcastBot:
                                 {"$set": {"status": status}}
                             )
                         except Exception as e:
-                            logger.error(f"❌ Error executing auto delete: {e}")
+                            logger.error(f"Error executing auto delete: {e}")
                             self.scheduled_broadcasts_col.update_one(
                                 {"_id": delete_task["_id"]},
                                 {"$set": {"status": "failed", "error": str(e)}}
@@ -533,11 +533,11 @@ class AdvancedBroadcastBot:
                     "status": {"$in": ["completed", "failed", "already_deleted"]}
                 })
                 if cleanup_result.deleted_count > 0:
-                    logger.info(f"🧹 Cleaned up {cleanup_result.deleted_count} old auto delete tasks")
+                    logger.info(f"Cleaned up {cleanup_result.deleted_count} old auto delete tasks")
                 
                 time.sleep(15)  # Check every 15 seconds for better responsiveness
             except Exception as e:
-                logger.error(f"❌ Error in scheduled tasks checker: {e}")
+                logger.error(f"Error in scheduled tasks checker: {e}")
                 time.sleep(30)
 
     def check_expired_premium_users(self):
@@ -957,15 +957,15 @@ def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
             "type": "auto_delete"
         })
         
-        logger.info(f"✅ Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
+        logger.info(f"Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # For very short times (5 minutes or less), also set immediate timer
         if delete_time <= 5:
             threading.Timer(delete_time * 60, lambda: execute_auto_delete(chat_id, msg_id)).start()
-            logger.info(f"⚡ Immediate timer set for {delete_time} minute auto delete")
+            logger.info(f"Immediate timer set for {delete_time} minute auto delete")
         
     except Exception as e:
-        logger.error(f"❌ Error scheduling auto delete: {e}")
+        logger.error(f"Error scheduling auto delete: {e}")
 
 def execute_auto_delete(chat_id: int, msg_id: int):
     """Execute auto delete with enhanced retry logic and better error handling"""
@@ -978,7 +978,7 @@ def execute_auto_delete(chat_id: int, msg_id: int):
             
             result = bot.delete_message(chat_id, msg_id)
             if result:
-                logger.info(f"✅ Auto deleted message {msg_id} from {chat_id}")
+                logger.info(f"Auto deleted message {msg_id} from {chat_id}")
                 broadcast_bot.update_analytics("auto_deletes")
                 
                 # Update message status
@@ -998,7 +998,7 @@ def execute_auto_delete(chat_id: int, msg_id: int):
             
             # Handle different error types
             if "message to delete not found" in error_msg or "message not found" in error_msg:
-                logger.info(f"✅ Message {msg_id} from {chat_id} already deleted or not found")
+                logger.info(f"Message {msg_id} from {chat_id} already deleted or not found")
                 # Update message status as already deleted
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
@@ -1007,7 +1007,7 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 return True  # Consider this a success since the goal is achieved
                 
             elif "chat not found" in error_msg or "channel not found" in error_msg:
-                logger.warning(f"❌ Channel {chat_id} not found for message {msg_id}")
+                logger.warning(f"Channel {chat_id} not found for message {msg_id}")
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
                     {"$set": {"status": "channel_not_found", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
@@ -1015,7 +1015,7 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 return False  # Don't retry for channel not found
                 
             elif "not enough rights" in error_msg or "forbidden" in error_msg:
-                logger.warning(f"❌ No permission to delete message {msg_id} from {chat_id}")
+                logger.warning(f"No permission to delete message {msg_id} from {chat_id}")
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
                     {"$set": {"status": "no_permission", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
@@ -1023,16 +1023,16 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 return False  # Don't retry for permission issues
                 
             elif "flood" in error_msg or "too many requests" in error_msg:
-                logger.warning(f"⚠️ Rate limited for message {msg_id} from {chat_id}, waiting longer...")
+                logger.warning(f"Rate limited for message {msg_id} from {chat_id}, waiting longer...")
                 if attempt < max_retries - 1:
                     time.sleep(retry_delays[attempt] * 2)  # Double delay for rate limits
                     continue
                     
             elif attempt < max_retries - 1:
-                logger.warning(f"⚠️ Delete attempt {attempt + 1} failed: {e}")
+                logger.warning(f"Delete attempt {attempt + 1} failed: {e}")
                 time.sleep(retry_delays[attempt])
             else:
-                logger.error(f"❌ Auto delete failed for {chat_id}: {e}")
+                logger.error(f"Auto delete failed for {chat_id}: {e}")
                 broadcast_bot.broadcast_messages_col.update_one(
                     {"channel_id": chat_id, "message_id": msg_id},
                     {"$set": {"status": "delete_failed", "deleted_at": datetime.now(), "delete_attempts": attempt + 1, "error": str(e)}}
@@ -3027,7 +3027,7 @@ def handle_message(message):
 def track_bot_message(user_id: int, message_id: int):
     """Track bot messages for later deletion"""
     try:
-        broadcast_bot.db.bot_messages.insert_one({
+        db.bot_messages.insert_one({
             "user_id": user_id,
             "message_id": message_id,
             "timestamp": datetime.now()
@@ -3040,7 +3040,7 @@ def delete_bot_messages(user_id: int):
     deleted_count = 0
     try:
         # Get all tracked bot messages for this user
-        bot_messages = list(broadcast_bot.db.bot_messages.find({"user_id": user_id}))
+        bot_messages = list(db.bot_messages.find({"user_id": user_id}))
         
         for msg in bot_messages:
             try:
@@ -3051,7 +3051,7 @@ def delete_bot_messages(user_id: int):
                 pass
         
         # Clear tracked messages from database
-        broadcast_bot.db.bot_messages.delete_many({"user_id": user_id})
+        db.bot_messages.delete_many({"user_id": user_id})
         
     except Exception as e:
         logger.warning(f"Failed to delete bot messages: {e}")
@@ -3062,108 +3062,40 @@ if __name__ == "__main__":
     logger.info("Advanced Broadcast Bot starting...")
     
     try:
+        # Start background tasks
+        logger.info("Starting background tasks...")
+        
+        # Start scheduled broadcasts checker
+        import threading
+        scheduled_thread = threading.Thread(target=broadcast_bot.check_scheduled_broadcasts, daemon=True)
+        scheduled_thread.start()
+        logger.info("Scheduled broadcasts checker started")
+        
+        # Start premium users checker
+        premium_thread = threading.Thread(target=broadcast_bot.check_expired_premium_users, daemon=True)
+        premium_thread.start()
+        logger.info("Premium users checker started")
+        
         # Update analytics on startup
-        broadcast_bot.update_analytics("active_users", 0)
-        logger.info("Analytics updated successfully")
-    except Exception as e:
-        logger.error(f"Error updating analytics: {e}")
-    
-    # Check if running on Heroku
-    port = int(os.environ.get('PORT', 5000))
-    
-    try:
-        if os.environ.get('PORT'):
-            # Heroku deployment - use polling (more reliable)
-            logger.info("🌐 Starting on Heroku with polling...")
-            
-            # Force remove webhook using direct API call
-            import requests
-            
-            for attempt in range(5):
-                try:
-                    # Direct API call to delete webhook
-                    delete_url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook"
-                    response = requests.post(delete_url, timeout=10)
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        if result.get("ok"):
-                            logger.info(f"Webhook deletion attempt {attempt + 1} successful")
-                            break
-                        else:
-                            logger.warning(f"Webhook deletion attempt {attempt + 1} failed: {result}")
-                    else:
-                        logger.warning(f"Webhook deletion attempt {attempt + 1} failed with status {response.status_code}")
-                    
-                    time.sleep(3)  # Wait between attempts
-                except Exception as e:
-                    logger.warning(f"Webhook deletion attempt {attempt + 1} failed: {e}")
-                    time.sleep(3)
-            
-            # Also try bot.remove_webhook() as backup
-            try:
-                bot.remove_webhook()
-                logger.info("Backup webhook removal successful")
-            except Exception as e:
-                logger.warning(f"Backup webhook removal failed: {e}")
-            
-            logger.info("Starting polling after webhook removal...")
-            
-            # Start Flask server for health check
-            try:
-                from flask import Flask
-                
-                app = Flask(__name__)
-                
-                @app.route('/')
-                def home():
-                    return '🚀 Advanced Broadcast Bot is running on Heroku!'
-                
-                @app.route('/health')
-                def health():
-                    return '✅ Bot is healthy and running!', 200
-                
-                # Start Flask in background thread
-                import threading
-                def run_flask():
-                    try:
-                        app.run(host='0.0.0.0', port=port, threaded=True)
-                    except Exception as e:
-                        logger.error(f"Flask server error: {e}")
-                
-                flask_thread = threading.Thread(target=run_flask, daemon=True)
-                flask_thread.start()
-                logger.info("Flask server started successfully")
-                
-            except ImportError:
-                logger.warning("Flask not available, skipping web server")
-            except Exception as e:
-                logger.error(f"Error starting Flask server: {e}")
-            
-            # Start bot polling
-            logger.info("Starting bot polling...")
-            try:
-                bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
-            except Exception as e:
-                logger.error(f"Polling error: {e}")
-                # Retry polling
-                time.sleep(5)
-                bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
-            
-        else:
-            # Local development - use polling
-            logger.info("Starting locally with polling...")
-            
-            # Remove any existing webhook for local development
-            try:
-                bot.remove_webhook()
-                logger.info("Webhook removed for local development")
-            except Exception as e:
-                logger.warning(f"Failed to remove webhook locally: {e}")
-            
-            bot.infinity_polling(none_stop=True, timeout=60)
-            
+        try:
+            broadcast_bot.update_analytics("active_users", 0)
+            logger.info("Analytics updated successfully")
+        except Exception as e:
+            logger.error(f"Error updating analytics: {e}")
+        
+        # Remove any existing webhook
+        try:
+            bot.remove_webhook()
+            logger.info("Webhook removed successfully")
+        except Exception as e:
+            logger.warning(f"Failed to remove webhook: {e}")
+        
+        # Start bot polling
+        logger.info("Starting bot polling...")
+        bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
+        
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
         logger.error(f"Error details: {type(e).__name__}: {str(e)}")
-        # Auto-restart logic could be added here
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")

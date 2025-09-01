@@ -9014,3 +9014,48 @@ requests.exceptions.ConnectionError: ('Connection aborted.', ConnectionResetErro
 2025-09-01 10:02:07,852 - __main__ - INFO - Processing callback: add_channel for user 8121559051
 2025-09-01 10:02:12,248 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
 2025-09-01 10:02:12,251 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
+2025-09-01 10:19:56,910 - __main__ - INFO - MongoDB connected successfully
+2025-09-01 10:19:56,980 - __main__ - INFO - Starting background tasks...
+2025-09-01 10:19:56,987 - __main__ - INFO - Background tasks started successfully
+2025-09-01 10:19:57,007 - __main__ - INFO - Advanced Broadcast Bot starting...
+2025-09-01 10:19:57,429 - __main__ - INFO - Analytics updated successfully
+2025-09-01 10:19:57,430 - __main__ - INFO - Starting locally with polling...
+2025-09-01 10:19:59,176 - __main__ - INFO - Webhook removed for local development
+2025-09-01 10:20:11,476 - __main__ - INFO - Callback received: broadcast from user 8121559051
+2025-09-01 10:20:11,479 - __main__ - INFO - Processing callback: broadcast for user 8121559051
+2025-09-01 10:20:11,493 - __main__ - INFO - Broadcast button pressed by user 8121559051
+2025-09-01 10:20:15,205 - __main__ - INFO - Callback received: add_channel from user 8121559051
+2025-09-01 10:20:15,210 - __main__ - INFO - Processing callback: add_channel for user 8121559051
+2025-09-01 10:20:17,680 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
+2025-09-01 10:20:17,683 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
+2025-09-01 10:20:24,144 - __main__ - INFO - Callback received: repost_no from user 8121559051
+2025-09-01 10:20:24,148 - __main__ - INFO - Processing callback: repost_no for user 8121559051
+2025-09-01 10:20:35,540 - __main__ - INFO - Callback received: add_channel from user 8121559051
+2025-09-01 10:20:35,543 - __main__ - INFO - Processing callback: add_channel for user 8121559051
+2025-09-01 10:20:37,483 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
+2025-09-01 10:20:37,486 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
+2025-09-01 10:26:33,291 - bot - INFO - MongoDB connected successfully
+2025-09-01 10:26:33,381 - bot - INFO - Starting background tasks...
+2025-09-01 10:26:33,388 - bot - INFO - Background tasks started successfully
+2025-09-01 10:32:01,014 - bot - INFO - MongoDB connected successfully
+2025-09-01 10:32:01,100 - bot - INFO - Starting background tasks...
+2025-09-01 10:32:01,102 - bot - INFO - Starting scheduled tasks checker...
+2025-09-01 10:32:01,110 - bot - INFO - Background tasks started successfully
+2025-09-01 10:34:40,877 - bot - INFO - MongoDB connected successfully
+2025-09-01 10:34:40,967 - bot - INFO - Starting background tasks...
+2025-09-01 10:34:40,969 - bot - INFO - Starting scheduled tasks checker...
+2025-09-01 10:34:40,973 - bot - INFO - Background tasks started successfully
+2025-09-01 10:36:22,842 - __main__ - INFO - MongoDB connected successfully
+2025-09-01 10:36:22,926 - __main__ - INFO - Starting background tasks...
+2025-09-01 10:36:22,928 - __main__ - INFO - Starting scheduled tasks checker...
+2025-09-01 10:36:22,931 - __main__ - INFO - Background tasks started successfully
+2025-09-01 10:36:22,932 - __main__ - INFO - Advanced Broadcast Bot starting...
+2025-09-01 10:36:22,933 - __main__ - INFO - Starting background tasks...
+2025-09-01 10:36:22,935 - __main__ - INFO - Starting scheduled tasks checker...
+2025-09-01 10:36:22,937 - __main__ - INFO - Scheduled broadcasts checker started
+2025-09-01 10:36:22,940 - __main__ - INFO - Premium users checker started
+2025-09-01 10:36:23,281 - __main__ - INFO - Analytics updated successfully
+2025-09-01 10:39:11,677 - __main__ - INFO - Callback received: add_channel from user 8121559051
+2025-09-01 10:39:11,680 - __main__ - INFO - Processing callback: add_channel for user 8121559051
+2025-09-01 10:39:14,282 - __main__ - INFO - Callback received: add_single_channel from user 8121559051
+2025-09-01 10:39:14,285 - __main__ - INFO - Processing callback: add_single_channel for user 8121559051
