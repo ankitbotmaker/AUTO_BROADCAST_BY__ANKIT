@@ -550,6 +550,9 @@ def extract_telegram_links(text: str) -> List[str]:
 def resolve_telegram_link(link: str) -> Optional[int]:
     """Resolve Telegram link to channel ID"""
     try:
+        # Clean the link first
+        link = link.strip()
+        
         # Try to get chat info directly
         if link.startswith('@'):
             chat_info = bot.get_chat(link)
@@ -557,6 +560,8 @@ def resolve_telegram_link(link: str) -> Optional[int]:
         elif link.startswith('https://t.me/') or link.startswith('t.me/'):
             # Extract username preserving underscores
             username = link.split('/')[-1]
+            # Remove any query parameters
+            username = username.split('?')[0]
             # Ensure username is properly formatted
             if not username.startswith('@'):
                 username = f"@{username}"
@@ -565,6 +570,8 @@ def resolve_telegram_link(link: str) -> Optional[int]:
         elif link.startswith('https://telegram.me/'):
             # Extract username preserving underscores
             username = link.split('/')[-1]
+            # Remove any query parameters
+            username = username.split('?')[0]
             # Ensure username is properly formatted
             if not username.startswith('@'):
                 username = f"@{username}"
@@ -585,15 +592,22 @@ def auto_add_telegram_links(user_id: int, text: str) -> List[Dict]:
     added_channels = []
     links = extract_telegram_links(text)
     
+    logger.info(f"Found {len(links)} links in text: {links}")
+    
     for link in links:
         try:
+            logger.info(f"Processing link: {link}")
             channel_id = resolve_telegram_link(link)
             if channel_id:
+                logger.info(f"Resolved link {link} to channel ID: {channel_id}")
+                
                 # Check if channel already exists
-                existing = broadcast_bot.channels_col.find_one({
-                    "user_id": user_id,
-                    "channel_id": channel_id
-                })
+                existing = None
+                if broadcast_bot.channels_col:
+                    existing = broadcast_bot.channels_col.find_one({
+                        "user_id": user_id,
+                        "channel_id": channel_id
+                    })
                 
                 if not existing:
                     # Get channel info
@@ -601,24 +615,29 @@ def auto_add_telegram_links(user_id: int, text: str) -> List[Dict]:
                     channel_name = chat_info.title or chat_info.username or f"Channel {channel_id}"
                     
                     # Add channel to database
-                    broadcast_bot.add_channel(
+                    success = broadcast_bot.add_channel(
                         channel_id=channel_id,
                         user_id=user_id
                     )
                     
-                    added_channels.append({
-                        "channel_id": channel_id,
-                        "channel_name": channel_name,
-                        "username": chat_info.username
-                    })
-                    
-                    logger.info(f"Auto-added channel {channel_name} ({channel_id}) for user {user_id}")
+                    if success:
+                        added_channels.append({
+                            "channel_id": channel_id,
+                            "channel_name": channel_name,
+                            "username": chat_info.username
+                        })
+                        logger.info(f"Successfully added channel {channel_name} ({channel_id}) for user {user_id}")
+                    else:
+                        logger.error(f"Failed to add channel {channel_id} to database")
                 else:
                     logger.info(f"Channel {channel_id} already exists for user {user_id}")
+            else:
+                logger.warning(f"Could not resolve link {link} to channel ID")
                     
         except Exception as e:
             logger.error(f"Error auto-adding channel {link}: {e}")
     
+    logger.info(f"Auto-added {len(added_channels)} channels for user {user_id}")
     return added_channels
 
 def send_message_to_channel(channel_data: Dict, message, broadcast_id: str, delete_time: Optional[int] = None) -> Dict:
@@ -648,24 +667,35 @@ def send_message_to_channel(channel_data: Dict, message, broadcast_id: str, dele
         # Send based on content type
         if message.content_type == "text":
             text_to_send = formatted_text if formatted_text else message.text
+            if not text_to_send or not text_to_send.strip():
+                text_to_send = "📢 Broadcast Message"
             sent = bot.send_message(channel_id, text_to_send, parse_mode="Markdown")
         elif message.content_type == "photo":
             caption = formatted_text if formatted_text else (message.caption or "")
+            if not caption or not caption.strip():
+                caption = "📢 Broadcast Message"
             try:
                 sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
             except Exception as e:
+                logger.warning(f"Forward failed for {channel_id}, trying send_photo: {e}")
                 sent = bot.send_photo(channel_id, message.photo[-1].file_id, caption=caption, parse_mode="Markdown")
         elif message.content_type == "video":
             caption = formatted_text if formatted_text else (message.caption or "")
+            if not caption or not caption.strip():
+                caption = "📢 Broadcast Message"
             try:
                 sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
             except Exception as e:
+                logger.warning(f"Forward failed for {channel_id}, trying send_video: {e}")
                 sent = bot.send_video(channel_id, message.video.file_id, caption=caption, parse_mode="Markdown")
         elif message.content_type == "document":
             caption = formatted_text if formatted_text else (message.caption or "")
+            if not caption or not caption.strip():
+                caption = "📢 Broadcast Message"
             try:
                 sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
             except Exception as e:
+                logger.warning(f"Forward failed for {channel_id}, trying send_document: {e}")
                 sent = bot.send_document(channel_id, message.document.file_id, caption=caption, parse_mode="Markdown")
         else:
             sent = bot.forward_message(channel_id, message.chat.id, message.message_id)
@@ -3116,6 +3146,11 @@ def handle_message(message):
         # Auto-start broadcast flow if user sends text/media with caption in private chat
         if not state and message.chat.type == 'private' and (getattr(message, 'text', None) or getattr(message, 'caption', None) or message.content_type in ["photo", "video", "document"]):
             logger.info(f"Auto-starting broadcast flow for user {user_id}, content_type: {message.content_type}")
+            # Check if user has any channels first
+            user_channels = broadcast_bot.get_all_channels(user_id)
+            if not user_channels:
+                bot.send_message(user_id, "❌ **No channels found!**\n\nPlease add channels first using /add command.")
+                return
             start_broadcast_flow_from_message(user_id, message)
             return
 
@@ -3129,8 +3164,12 @@ def handle_message(message):
             
             # Auto-add Telegram links as channels but PRESERVE original text
             added_channels = []
-            if original_text:
+            if original_text and original_text.strip():
+                logger.info(f"Processing text for links: {original_text[:100]}...")
                 added_channels = auto_add_telegram_links(user_id, original_text)
+                logger.info(f"Auto-added {len(added_channels)} channels from text")
+            else:
+                logger.info("No text found in message for link processing")
             
             # Store ORIGINAL text for broadcasting (don't remove links!)
             state["formatted_text"] = original_text
@@ -3339,15 +3378,21 @@ def handle_message(message):
         # If no state and in private chat, start broadcast flow
         if message.chat.type == 'private' and not state:
             logger.info(f"Starting broadcast flow for user {user_id} in private chat")
+            # Check if user has any channels first
+            user_channels = broadcast_bot.get_all_channels(user_id)
+            if not user_channels:
+                bot.send_message(user_id, "❌ **No channels found!**\n\nPlease add channels first using /add command.")
+                return
             start_broadcast_flow_from_message(user_id, message)
             return
 
     except Exception as e:
         logger.error(f"Error in handle_message: {e}")
+        logger.error(f"Message details - User: {user_id}, Type: {getattr(message, 'content_type', 'unknown')}, Text: {getattr(message, 'text', 'None')[:100]}")
         try:
-            bot.send_message(user_id, "❌ **Error occurred!**\n\nPlease try again or contact support.")
-        except:
-            pass
+            bot.send_message(user_id, "❌ **Error occurred!**\n\nPlease try again or contact support.\n\n**Debug Info:** Check bot logs for details.")
+        except Exception as e2:
+            logger.error(f"Failed to send error message: {e2}")
 
 def track_bot_message(user_id: int, message_id: int):
     """Track bot messages for later deletion"""
