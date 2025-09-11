@@ -165,7 +165,7 @@ python bot.py
 ### 🌐 Heroku Deployment
 
 #### Method 1: One-Click Deploy
-[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/ankitbotmaker/ankitbb)
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://heroku.com/deploy?template=https://github.com/ankitbotmaker/bbbot)
 
 #### Method 2: Manual Deployment
 
