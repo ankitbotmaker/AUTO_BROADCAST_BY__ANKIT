@@ -49,7 +49,7 @@ if not BOT_TOKEN:
 
 # MongoDB connection with advanced configuration
 try:
-    client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=5000)
+    client = MongoClient(MONGO_URL, serverSelectionTimeoutMS=10000, connectTimeoutMS=10000)
     client.admin.command('ping')
     db = client["advanced_broadcast_bot"]
     
@@ -60,11 +60,21 @@ try:
     scheduled_broadcasts_col = db["scheduled_broadcasts"]
     analytics_col = db["analytics"]
     settings_col = db["settings"]
+    bot_messages_col = db["bot_messages"]
     
     logger.info("MongoDB connected successfully")
 except Exception as e:
     logger.error(f"MongoDB connection failed: {e}")
-    raise
+    # Create a simple in-memory fallback
+    logger.warning("Using fallback mode - some features may be limited")
+    db = None
+    channels_col = None
+    broadcast_messages_col = None
+    users_col = None
+    scheduled_broadcasts_col = None
+    analytics_col = None
+    settings_col = None
+    bot_messages_col = None
 
 # Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -236,11 +246,13 @@ class AdvancedBroadcastBot:
         self.analytics_col = analytics_col
         self.settings_col = settings_col
         
-        # Initialize analytics
-        self.init_analytics()
+        # Initialize analytics only if MongoDB is available
+        if self.analytics_col is not None:
+            self.init_analytics()
         
-        # Start background tasks
-        self.start_background_tasks()
+        # Start background tasks only if MongoDB is available
+        if self.scheduled_broadcasts_col is not None:
+            self.start_background_tasks()
 
     def init_analytics(self):
         """Initialize analytics collection"""
@@ -267,7 +279,6 @@ class AdvancedBroadcastBot:
         """Start background tasks"""
         logger.info("Starting background tasks...")
         threading.Thread(target=self.check_scheduled_broadcasts, daemon=True).start()
-        threading.Thread(target=self.check_expired_premium_users, daemon=True).start()
         logger.info("Background tasks started successfully")
 
     def add_channel(self, channel_id: int, user_id: int) -> bool:
@@ -316,16 +327,22 @@ class AdvancedBroadcastBot:
             logger.error(f"Error getting channels for user {user_id}: {e}")
             return []
 
-    def save_broadcast_message(self, user_id: int, channel_id: int, message_id: int, broadcast_id: str):
+    def save_broadcast_message(self, user_id: int, channel_id: int, message_id: int, broadcast_id: str, message_type: str = "broadcast"):
         """Save broadcast message details"""
         try:
-            self.broadcast_messages_col.insert_one({
-                "user_id": user_id,
-                "channel_id": channel_id,
-                "message_id": message_id,
-                "broadcast_id": broadcast_id,
-                "sent_at": datetime.now()
-            })
+            if self.broadcast_messages_col is not None:
+                self.broadcast_messages_col.insert_one({
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                    "message_id": message_id,
+                    "broadcast_id": broadcast_id,
+                    "message_type": message_type,
+                    "status": "active",
+                    "created_at": datetime.now(),
+                    "sent_at": datetime.now()
+                })
+            else:
+                logger.warning("MongoDB not available - broadcast message not saved")
         except Exception as e:
             logger.error(f"Error saving broadcast message: {e}")
 
@@ -341,31 +358,17 @@ class AdvancedBroadcastBot:
             # Get broadcast count
             broadcast_count = self.broadcast_messages_col.count_documents({"user_id": user_id})
             
-            # Determine subscription type
-            subscription_type = "Free"
-            if user_data:
-                if user_data.get("is_premium"):
-                    subscription_type = "Premium"
-                elif user_data.get("is_authorized"):
-                    subscription_type = "Authorized"
-            
             return {
                 "total_channels": channel_count,
                 "total_broadcasts": broadcast_count,
-                "subscription_type": subscription_type,
-                "is_premium": user_data.get("is_premium", False) if user_data else False,
-                "is_authorized": user_data.get("is_authorized", False) if user_data else False,
-                "premium_expires": user_data.get("premium_expires") if user_data else None
+                "subscription_type": "Free"
             }
         except Exception as e:
             logger.error(f"Error getting user analytics for {user_id}: {e}")
             return {
                 "total_channels": 0,
                 "total_broadcasts": 0,
-                "subscription_type": "Free",
-                "is_premium": False,
-                "is_authorized": False,
-                "premium_expires": None
+                "subscription_type": "Free"
             }
 
     def is_admin(self, user_id: int) -> bool:
@@ -375,10 +378,6 @@ class AdvancedBroadcastBot:
     def is_authorized(self, user_id: int) -> bool:
         """Authorization disabled: all users are authorized."""
         return True
-
-    def is_premium(self, user_id: int) -> bool:
-        """Premium disabled: always False (all features are free)."""
-        return False
 
     def add_user(self, user_id: int, username: str, first_name: str, last_name: str):
         """Add or update user"""
@@ -394,7 +393,6 @@ class AdvancedBroadcastBot:
                     },
                     "$setOnInsert": {
                         "joined_at": datetime.now(),
-                        "is_premium": False,
                         "total_broadcasts": 0
                     }
                 },
@@ -402,42 +400,6 @@ class AdvancedBroadcastBot:
             )
         except Exception as e:
             logger.error(f"Error adding user: {e}")
-
-    def make_premium(self, user_id: int, days: int = 30) -> bool:
-        """Make user premium (owner only)"""
-        try:
-            expiry = datetime.now() + timedelta(days=days)
-            self.users_col.update_one(
-                {"user_id": user_id},
-                {
-                    "$set": {
-                        "is_premium": True,
-                        "premium_expiry": expiry,
-                        "premium_activated_at": datetime.now()
-                    },
-                    "$setOnInsert": {
-                        "joined_at": datetime.now(),
-                        "total_broadcasts": 0
-                    }
-                },
-                upsert=True
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error making user premium: {e}")
-            return False
-
-    def remove_premium(self, user_id: int) -> bool:
-        """Remove premium from user (owner only)"""
-        try:
-            self.users_col.update_one(
-                {"user_id": user_id},
-                {"$set": {"is_premium": False}}
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Error removing premium: {e}")
-            return False
 
     def update_analytics(self, metric: str, value: int = 1):
         """Update analytics"""
@@ -540,27 +502,6 @@ class AdvancedBroadcastBot:
                 logger.error(f"Error in scheduled tasks checker: {e}")
                 time.sleep(30)
 
-    def check_expired_premium_users(self):
-        """Check and update expired premium users"""
-        while True:
-            try:
-                now = datetime.now()
-                expired_users = self.users_col.find({
-                    "is_premium": True,
-                    "premium_expiry": {"$lt": now}
-                })
-                
-                for user in expired_users:
-                    self.users_col.update_one(
-                        {"_id": user["_id"]},
-                        {"$set": {"is_premium": False}}
-                    )
-                    logger.info(f"Premium expired for user {user['user_id']}")
-                
-                time.sleep(3600)  # Check every hour
-            except Exception as e:
-                logger.error(f"Error checking expired premium users: {e}")
-                time.sleep(3600)
 
     def execute_scheduled_broadcast(self, broadcast_data):
         """Execute a scheduled broadcast"""
@@ -574,9 +515,13 @@ class AdvancedBroadcastBot:
     def get_broadcast_messages(self, user_id: int, limit: int = 100) -> List[Dict]:
         """Get broadcast messages for a user"""
         try:
-            return list(self.broadcast_messages_col.find(
-                {"user_id": user_id}
-            ).sort("sent_at", -1).limit(limit))
+            if self.broadcast_messages_col is not None:
+                return list(self.broadcast_messages_col.find(
+                    {"user_id": user_id}
+                ).sort("sent_at", -1).limit(limit))
+            else:
+                logger.warning("MongoDB not available - returning empty broadcast messages list")
+                return []
         except Exception as e:
             logger.error(f"Error getting broadcast messages for user {user_id}: {e}")
             return []
@@ -775,12 +720,18 @@ def finish_advanced_broadcast(chat_id: int):
             "failed": 0
         }
 
-        # Send initial status
-        status_msg = bot.send_message(
-            chat_id,
-            f"📡 **Broadcasting to {len(channels)} channels...**\n\n⏳ Please wait...",
-            parse_mode="Markdown"
-        )
+        # Send initial status with loading animation
+        loading_text = f"""
+<b>📡 BROADCAST INITIALIZATION</b>
+
+<blockquote><b>🚀 Starting Broadcast Process</b>
+• <b>Channels:</b> {len(channels)}
+• <b>Status:</b> {create_loading_animation(0)}
+• <b>Progress:</b> {create_progress_bar(0, len(channels))}</blockquote>
+
+<b>⚡ Processing channels...</b>
+        """
+        status_msg = send_loading_message(chat_id, loading_text)
 
         # Process broadcasts concurrently
         futures = []
@@ -808,17 +759,21 @@ def finish_advanced_broadcast(chat_id: int):
                     failed_count += 1
                     failed_channels.append(str(result["channel_id"]))
                 
-                # Update progress every 5 channels
+                # Update progress every 5 channels with animation
                 if (i + 1) % 5 == 0:
                     try:
-                        bot.edit_message_text(
-                            f"📡 **Broadcasting Progress**\n\n"
-                            f"✅ Sent: {sent_count}\n"
-                            f"❌ Failed: {failed_count}\n"
-                            f"📊 Progress: {i + 1}/{len(channels)}",
-                            chat_id, status_msg.message_id,
-                            parse_mode="Markdown"
-                        )
+                        progress_text = f"""
+<b>📡 BROADCAST IN PROGRESS</b>
+
+<blockquote><b>🚀 Broadcasting Status</b>
+• <b>Sent:</b> {sent_count} ✅
+• <b>Failed:</b> {failed_count} ❌
+• <b>Status:</b> {create_loading_animation((i + 1) // 5)}
+• <b>Progress:</b> {create_progress_bar(i + 1, len(channels))}</blockquote>
+
+<b>⚡ Processing: {i + 1}/{len(channels)} channels</b>
+                        """
+                        send_loading_message(chat_id, progress_text, status_msg.message_id)
                     except Exception as e:
                         logger.error(f"Failed to update progress message: {e}")
                         
@@ -841,20 +796,23 @@ def finish_advanced_broadcast(chat_id: int):
             }
         )
 
-        # Final result message
+        # Final result message with enhanced UI
         result_text = f"""
-✅ **Broadcast Completed!**
+<b>🎉 BROADCAST COMPLETED!</b>
 
-📊 **Results:**
-• ✅ **Sent:** `{sent_count}`
-• ❌ **Failed:** `{failed_count}`
-• 📢 **Total Channels:** `{len(channels)}`
-• 🕐 **Broadcast Time:** `{datetime.now().strftime('%H:%M:%S')}`
+<blockquote><b>📊 BROADCAST RESULTS</b>
+• <b>Sent:</b> {sent_count} ✅
+• <b>Failed:</b> {failed_count} ❌
+• <b>Total Channels:</b> {len(channels)}
+• <b>Success Rate:</b> {int((sent_count / len(channels)) * 100) if len(channels) > 0 else 0}%
+• <b>Time:</b> {datetime.now().strftime('%H:%M:%S')}</blockquote>
 
-⚙️ **Settings:**
-• 🔄 **Auto Repost:** {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
-• 🗑 **Auto Delete:** {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
-• 📋 **Broadcast ID:** `{broadcast_id}`
+<b>⚙️ BROADCAST SETTINGS</b>
+<blockquote>• <b>Auto Repost:</b> {'✅' if repost_time else '❌'} {f'({repost_time} min)' if repost_time else ''}
+• <b>Auto Delete:</b> {'✅' if delete_time else '❌'} {f'({delete_time} min)' if delete_time else ''}
+• <b>Broadcast ID:</b> <code>{broadcast_id}</code></blockquote>
+
+<b>🚀 {create_loading_animation(4)}</b>
         """
         
         if failed_channels:
@@ -875,15 +833,18 @@ def finish_advanced_broadcast(chat_id: int):
 
         # Start auto repost if enabled
         if repost_time:
-            repost_msg = bot.send_message(
-                chat_id,
-                f"🔄 **Auto Repost Started!**\n\n"
-                f"⏱ **Interval:** `{repost_time} minutes`\n"
-                f"🗑 **Auto Delete:** {'✅' if delete_time else '❌'}\n"
-                f"🔢 **Channels:** `{sent_count}`\n\n"
-                f"Use **⏹ Stop Repost** button to cancel.",
-                parse_mode="Markdown"
-            )
+            repost_text = f"""
+<b>🔄 AUTO REPOST ACTIVATED!</b>
+
+<blockquote><b>⚙️ REPOST CONFIGURATION</b>
+• <b>Interval:</b> {repost_time} minutes
+• <b>Auto Delete:</b> {'✅' if delete_time else '❌'}
+• <b>Channels:</b> {sent_count}
+• <b>Status:</b> {create_loading_animation(1)}</blockquote>
+
+<b>💡 Use ⏹ Stop Repost button to cancel</b>
+            """
+            repost_msg = bot.send_message(chat_id, repost_text, parse_mode="HTML")
             # Auto-delete repost message after 15 seconds
             if repost_msg:
                 threading.Timer(15, lambda: delete_message_safe(chat_id, repost_msg.message_id)).start()
@@ -893,7 +854,7 @@ def finish_advanced_broadcast(chat_id: int):
             threading.Thread(
                 target=advanced_auto_repost, 
                 args=(chat_id, message, repost_time, delete_time, stop_flag)
-            ).start()
+                    ).start()
 
         # Clear broadcast state and active broadcast
         bot_state.broadcast_state.pop(chat_id, None)
@@ -906,6 +867,70 @@ def finish_advanced_broadcast(chat_id: int):
         bot_state.active_broadcasts.pop(chat_id, None)
 
 
+
+def create_loading_animation(step: int = 0) -> str:
+    """Create animated loading interface"""
+    animations = [
+        "⏳ Loading...",
+        "🔄 Processing...",
+        "⚡ Working...",
+        "🚀 Almost done...",
+        "✅ Complete!"
+    ]
+    
+    dots = "●" * (step % 4) + "○" * (4 - (step % 4))
+    return f"{animations[step % len(animations)]} {dots}"
+
+def create_progress_bar(current: int, total: int, width: int = 10) -> str:
+    """Create a visual progress bar"""
+    if total == 0:
+        return "━" * width
+    
+    filled = int((current / total) * width)
+    empty = width - filled
+    
+    bar = "█" * filled + "░" * empty
+    percentage = int((current / total) * 100)
+    
+    return f"`{bar}` {percentage}%"
+
+def send_loading_message(chat_id: int, text: str, message_id: int = None) -> int:
+    """Send or update a loading message with animation"""
+    try:
+        if message_id:
+            # Update existing message
+            bot.edit_message_text(text, chat_id, message_id, parse_mode="HTML")
+            return message_id
+        else:
+            # Send new message
+            sent = bot.send_message(chat_id, text, parse_mode="HTML")
+            return sent.message_id
+    except Exception as e:
+        logger.error(f"Error sending loading message: {e}")
+        return None
+
+def show_typing_indicator(chat_id: int, duration: int = 3):
+    """Show typing indicator for specified duration"""
+    try:
+        bot.send_chat_action(chat_id, 'typing')
+        time.sleep(duration)
+    except Exception as e:
+        logger.error(f"Error showing typing indicator: {e}")
+
+def create_channel_addition_ui(channel_count: int, success_count: int, failed_count: int) -> str:
+    """Create UI for channel addition process"""
+    return f"""
+<b>📋 CHANNEL ADDITION PROGRESS</b>
+
+<blockquote><b>📊 ADDITION STATUS</b>
+• <b>Total:</b> {channel_count}
+• <b>Added:</b> {success_count} ✅
+• <b>Failed:</b> {failed_count} ❌
+• <b>Progress:</b> {create_progress_bar(success_count + failed_count, channel_count)}
+• <b>Status:</b> {create_loading_animation((success_count + failed_count) // 5)}</blockquote>
+
+<b>⚡ Processing channels...</b>
+    """
 
 def send_and_delete(message, text, parse_mode="Markdown", reply_markup=None, delete_after=5):
     """Send message and auto-delete after specified seconds"""
@@ -952,10 +977,13 @@ def schedule_auto_delete(chat_id: int, msg_id: int, delete_time: int):
         }
         
         # Use scheduled_broadcasts collection for simplicity
-        broadcast_bot.scheduled_broadcasts_col.insert_one({
-            **auto_delete_data,
-            "type": "auto_delete"
-        })
+        if broadcast_bot.scheduled_broadcasts_col is not None:
+            broadcast_bot.scheduled_broadcasts_col.insert_one({
+                **auto_delete_data,
+                "type": "auto_delete"
+            })
+        else:
+            logger.warning("MongoDB not available - auto delete will not persist across restarts")
         
         logger.info(f"Auto delete scheduled: {msg_id} from {chat_id} at {delete_at.strftime('%Y-%m-%d %H:%M:%S')}")
         
@@ -982,10 +1010,11 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 broadcast_bot.update_analytics("auto_deletes")
                 
                 # Update message status
-                broadcast_bot.broadcast_messages_col.update_one(
-                    {"channel_id": chat_id, "message_id": msg_id},
-                    {"$set": {"status": "deleted", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
-                )
+                if broadcast_bot.broadcast_messages_col is not None:
+                    broadcast_bot.broadcast_messages_col.update_one(
+                        {"channel_id": chat_id, "message_id": msg_id},
+                        {"$set": {"status": "deleted", "deleted_at": datetime.now(), "delete_attempts": attempt + 1}}
+                    )
                 return True
             else:
                 logger.warning(f"Delete returned False for message {msg_id} from {chat_id}")
@@ -1033,10 +1062,11 @@ def execute_auto_delete(chat_id: int, msg_id: int):
                 time.sleep(retry_delays[attempt])
             else:
                 logger.error(f"Auto delete failed for {chat_id}: {e}")
-                broadcast_bot.broadcast_messages_col.update_one(
-                    {"channel_id": chat_id, "message_id": msg_id},
-                    {"$set": {"status": "delete_failed", "deleted_at": datetime.now(), "delete_attempts": attempt + 1, "error": str(e)}}
-                )
+                if broadcast_bot.broadcast_messages_col is not None:
+                    broadcast_bot.broadcast_messages_col.update_one(
+                        {"channel_id": chat_id, "message_id": msg_id},
+                        {"$set": {"status": "delete_failed", "deleted_at": datetime.now(), "delete_attempts": attempt + 1, "error": str(e)}}
+                    )
                 
     return False
 
@@ -1113,6 +1143,29 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
                     if sent:
                         success_count += 1
                         logger.info(f"Successfully reposted to {channel_id}")
+                        
+                        # Delete the previous message if it exists
+                        try:
+                            # Get the last message for this channel from this user
+                            if broadcast_bot.broadcast_messages_col is not None:
+                                last_msg = broadcast_bot.broadcast_messages_col.find_one(
+                                    {"user_id": chat_id, "channel_id": channel_id, "status": {"$ne": "deleted"}},
+                                    sort=[("created_at", -1)]
+                                )
+                                if last_msg and last_msg["message_id"] != sent.message_id:
+                                    logger.info(f"Deleting previous message {last_msg['message_id']} from {channel_id}")
+                                    try:
+                                        bot.delete_message(channel_id, last_msg["message_id"])
+                                        # Update status in database
+                                        broadcast_bot.broadcast_messages_col.update_one(
+                                            {"_id": last_msg["_id"]},
+                                            {"$set": {"status": "deleted", "deleted_at": datetime.now()}}
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to delete previous message: {e}")
+                        except Exception as e:
+                            logger.warning(f"Error handling previous message: {e}")
+                        
                         broadcast_bot.save_broadcast_message(
                             chat_id, channel_id, sent.message_id, 
                             f"auto_repost_{chat_id}_{int(time.time())}", "auto_repost"
@@ -1156,7 +1209,7 @@ def advanced_auto_repost(chat_id: int, message, repost_time: int, delete_time: O
             logger.error(f"Exception details: {type(e).__name__}: {str(e)}")
             time.sleep(60)
 
-@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test", "cid", "profile", "cleanbot"])
+@bot.message_handler(commands=["start", "help", "stats", "analytics", "premium", "cleanup", "clear", "id", "test", "cid", "profile", "cleanbot", "channelid"])
 def start_cmd(message):
     """Enhanced start command with analytics"""
     user_id = message.from_user.id
@@ -1173,11 +1226,13 @@ def start_cmd(message):
         # Test if bot is working
         bot.send_message(
             message.chat.id, 
-            "🧪 **Bot Test Successful!** ✅\n\n"
-            "🎯 **Bot Status:** Online\n"
-            "📡 **Connection:** Active\n"
-            "⚡ **Response Time:** Instant\n\n"
+            "🧪 <b>Bot Test Successful!</b> ✅\n\n"
+            "<blockquote>"
+            "🎯 <b>Bot Status:</b> Online\n"
+            "📡 <b>Connection:</b> Active\n"
+            "⚡ <b>Response Time:</b> Instant\n\n"
             "✅ All systems are working correctly!"
+            "</blockquote>"
         )
         logger.info(f"Test command executed successfully by user {message.chat.id}")
         return
@@ -1200,7 +1255,7 @@ def start_cmd(message):
 
 **💎 Subscription:**
 • Type: `{analytics.get('subscription_type', 'Free').title()}`
-• Status: {'🟢 Active' if broadcast_bot.is_premium(message.chat.id) else '🔶 Free'}
+• Status: 🔶 Free
         """
         bot.send_message(message.chat.id, stats_text, parse_mode="Markdown")
         return
@@ -1214,7 +1269,7 @@ def start_cmd(message):
         username = html_escape(f"@{message.from_user.username}") if message.from_user.username else "—"
         full_name = (first_name + (" " + last_name if last_name else "")).strip()
         plan = html_escape(analytics.get('subscription_type', 'Free').title())
-        status = "🟢 Active" if broadcast_bot.is_premium(user_id) else "🔶 Free"
+        status = "🔶 Free"
         member_since = html_escape(str(analytics.get('member_since', 'Unknown')))
         last_active = html_escape(str(analytics.get('last_active', 'Now')))
         total_channels = html_escape(str(analytics.get('total_channels', 0)))
@@ -1241,31 +1296,6 @@ def start_cmd(message):
         send_html(message.chat.id, profile_html)
         return
     
-    if message.text.startswith("/analytics") and broadcast_bot.is_admin(message.chat.id):
-        # Show admin analytics
-        today = datetime.now().strftime('%Y-%m-%d')
-        analytics = broadcast_bot.analytics_col.find_one({"date": today})
-        
-        if analytics:
-            admin_stats = f"""
-🔧 **Admin Analytics - {today}**
-
-**📊 Today's Stats:**
-• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
-• Messages Sent: `{analytics.get('total_messages_sent', 0)}`
-• Active Users: `{broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})}`
-• New Channels: `{analytics.get('new_channels_added', 0)}`
-• Auto Reposts: `{analytics.get('auto_reposts', 0)}`
-• Auto Deletes: `{analytics.get('auto_deletes', 0)}`
-• Failed Broadcasts: `{analytics.get('failed_broadcasts', 0)}`
-
-**📈 Overall Stats:**
-• Total Users: `{broadcast_bot.users_col.count_documents({})}`
-• Total Channels: `{broadcast_bot.channels_col.count_documents({})}`
-• Premium Users: `{broadcast_bot.users_col.count_documents({'is_premium': True})}`
-            """
-            bot.send_message(message.chat.id, admin_stats, parse_mode="Markdown")
-        return
     
     if message.text.startswith("/premium"):
         premium_text = f"""
@@ -1284,7 +1314,7 @@ def start_cmd(message):
 • Custom auto-repost intervals
 • Bulk channel management
 
-**Current Status:** {'💎 Premium' if broadcast_bot.is_premium(message.chat.id) else '🆓 Free'}
+**Current Status:** 🆓 Free
 
 Contact admin to upgrade to Premium!
         """
@@ -1343,7 +1373,84 @@ Contact admin to upgrade to Premium!
 • Send channel links in broadcast messages
             """
         
-        bot.send_message(message.chat.id, id_text, parse_mode="Markdown")
+        try:
+            bot.send_message(message.chat.id, id_text, parse_mode="Markdown")
+        except Exception as e:
+            logger.error(f"Error sending /id response: {e}")
+            # If bot can't send message in channel, try to send to user's private chat
+            if chat_type != "private":
+                try:
+                    user_id = message.from_user.id
+                    fallback_text = f"""
+🆔 **Channel Information**
+
+**📢 Channel Details:**
+• **Channel ID:** `{chat_id}`
+• **Channel Name:** {message.chat.title or "Unknown"}
+• **Chat Type:** {chat_type.title()}
+• **Username:** @{message.chat.username or "None"}
+
+**⚠️ Note:** Bot cannot respond in this channel.
+**💡 Solution:** Add bot as admin or use in private chat.
+
+**🔧 Quick Actions:**
+• Add bot as admin to enable commands
+• Use this ID to add channel to bot
+• Copy this ID for bulk channel addition
+                    """
+                    bot.send_message(user_id, fallback_text, parse_mode="Markdown")
+                except Exception as e2:
+                    logger.error(f"Failed to send fallback message: {e2}")
+        return
+    
+    if message.text.startswith("/channelid"):
+        # Simple channel ID command that works in any channel
+        chat_id = message.chat.id
+        chat_type = message.chat.type
+        
+        if chat_type == "private":
+            bot.send_message(chat_id, "❌ **This command only works in channels/groups!**\n\nUse `/id` for your user information.", parse_mode="Markdown")
+        else:
+            channel_info = f"""
+🆔 **Channel ID**
+
+**📢 Channel Details:**
+• **Channel ID:** `{chat_id}`
+• **Channel Name:** {message.chat.title or "Unknown"}
+• **Chat Type:** {chat_type.title()}
+• **Username:** @{message.chat.username or "None"}
+
+**💡 Usage:**
+• Copy this ID to add channel to bot
+• Use for bulk channel addition
+• Share with admin for management
+            """
+            try:
+                bot.send_message(chat_id, channel_info, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Error sending /channelid response: {e}")
+                # Try to send to user's private chat
+                try:
+                    user_id = message.from_user.id
+                    fallback_text = f"""
+🆔 **Channel ID**
+
+**📢 Channel Details:**
+• **Channel ID:** `{chat_id}`
+• **Channel Name:** {message.chat.title or "Unknown"}
+• **Chat Type:** {chat_type.title()}
+• **Username:** @{message.chat.username or "None"}
+
+**⚠️ Note:** Bot cannot respond in this channel.
+**💡 Solution:** Add bot as admin to enable commands.
+
+**🔧 Quick Actions:**
+• Add bot as admin to enable commands
+• Use this ID to add channel to bot
+                    """
+                    bot.send_message(user_id, fallback_text, parse_mode="Markdown")
+                except Exception as e2:
+                    logger.error(f"Failed to send fallback message: {e2}")
         return
     
     if message.text.startswith("/cid"):
@@ -1452,16 +1559,12 @@ Choose an option:
     markup.add(
         types.InlineKeyboardButton("📢 BROADCAST", callback_data="broadcast"),
         types.InlineKeyboardButton("➕ ADD CHANNEL", callback_data="add_channel"),
-    )
+        )
     markup.add(
         types.InlineKeyboardButton("📋 BULK ADD CHANNELS", callback_data="bulk_add_channels"),
         types.InlineKeyboardButton("🛑 STOP ALL", callback_data="stop_all_broadcasts"),
     )
     
-    if broadcast_bot.is_admin(message.chat.id):
-        markup.add(
-            types.InlineKeyboardButton("🔧 ADMIN PANEL", callback_data="admin_panel"),
-        )
 
     user_analytics = broadcast_bot.get_user_analytics(message.chat.id)
     _first = message.from_user.first_name or "-"
@@ -1476,30 +1579,31 @@ Choose an option:
 
     welcome_caption_html = (
         f"<b>🎉 ADVANCED BROADCAST BOT 🚀</b>\n\n"
-        f"<blockquote><b>👋 Welcome, {html_escape(_first).upper()}!</b>\n"
-        f"⚡ Your control center — manage broadcasts, channels & analytics\n"
-        f"<b>👤 Profile</b>\n"
-        f"• Name: {name_html}\n"
-        f"• Username: {username_html}\n"
-        f"• User ID: <code>{_uid}</code></blockquote>\n\n"
-        f"<b>📊 Your Dashboard</b>\n"
-        f"• Channels: <b>{user_analytics.get('total_channels', 0)}</b>\n"
-        f"• Broadcasts: <b>{user_analytics.get('total_broadcasts', 0)}</b>\n"
-        f"• Plan: <b>{plan_html}</b>\n"
-        f"• Status: ✅ ONLINE\n\n"
-        f"<b>🔥 Advanced Features</b>\n"
-        f"• Auto repost & delete\n"
-        f"• Scheduled broadcasts\n"
-        f"• Real-time analytics\n"
-        f"• Bulk operations\n"
-        f"• Instant Stop All\n\n"
-        f"<b>💡 Commands</b>\n"
-        f"• /id — Get channel IDs\n"
-        f"• /cid — List admin channel IDs\n"
-        f"• /profile — Your profile\n"
-        f"• /stats — Your statistics\n"
-        f"• /test — Bot test\n\n"
-        f"<b>🚀 Choose an option below</b>"
+        f"<blockquote><b>👋 WELCOME, {html_escape(_first).upper()}!</b>\n\n"
+        f"<b>⚡ YOUR CONTROL CENTER</b>\n"
+        f"Manage broadcasts, channels & analytics with ease\n\n"
+        f"<b>👤 PROFILE INFORMATION</b>\n"
+        f"• <b>Name:</b> {name_html}\n"
+        f"• <b>Username:</b> {username_html}\n"
+        f"• <b>User ID:</b> <code>{_uid}</code></blockquote>\n\n"
+        f"<b>📊 YOUR DASHBOARD</b>\n"
+        f"<blockquote>• <b>Channels:</b> {user_analytics.get('total_channels', 0)}\n"
+        f"• <b>Broadcasts:</b> {user_analytics.get('total_broadcasts', 0)}\n"
+        f"• <b>Plan:</b> {plan_html}\n"
+        f"• <b>Status:</b> ✅ ONLINE</blockquote>\n\n"
+        f"<b>🔥 ADVANCED FEATURES</b>\n"
+        f"<blockquote>• <b>Auto Repost & Delete</b> — Smart message management\n"
+        f"• <b>Scheduled Broadcasts</b> — Time-based messaging\n"
+        f"• <b>Real-time Analytics</b> — Live performance tracking\n"
+        f"• <b>Bulk Operations</b> — Mass channel management\n"
+        f"• <b>Instant Stop All</b> — Emergency controls</blockquote>\n\n"
+        f"<b>💡 QUICK COMMANDS</b>\n"
+        f"<blockquote>• <b>/id</b> — Get channel IDs\n"
+        f"• <b>/cid</b> — List admin channel IDs\n"
+        f"• <b>/profile</b> — Your profile details\n"
+        f"• <b>/stats</b> — Your statistics\n"
+        f"• <b>/test</b> — Bot functionality test</blockquote>\n\n"
+        f"<b>🚀 CHOOSE AN OPTION BELOW</b>"
     )
 
     try:
@@ -1526,17 +1630,52 @@ def callback_handler(call):
         state = bot_state.broadcast_state.get(user_id, {})
         
         logger.info(f"Processing callback: {call.data} for user {user_id}")
+        
+        # Answer callback query immediately to prevent timeout
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception as e:
+            logger.warning(f"Failed to answer callback query: {e}")
 
         if call.data == "test_button":
             logger.info("Test button pressed!")
-            bot.answer_callback_query(call.id, "✅ Test successful!")
-            bot.send_message(user_id, "🧪 **Test Successful!**\n\nBot is working correctly! ✅")
+            
+            # Show typing indicator
+            show_typing_indicator(user_id, 2)
+            
+            test_result = f"""
+<b>🧪 BOT FUNCTIONALITY TEST</b>
+
+<blockquote><b>✅ ALL SYSTEMS OPERATIONAL</b>
+• <b>Database:</b> Connected ✅
+• <b>Broadcast:</b> Ready ✅
+• <b>Auto-Delete:</b> Active ✅
+• <b>Auto-Repost:</b> Active ✅
+• <b>Status:</b> {create_loading_animation(4)}</blockquote>
+
+<b>🚀 Bot is working perfectly!</b>
+            """
+            bot.send_message(user_id, test_result, parse_mode="HTML")
             return
 
         elif call.data == "broadcast":
             logger.info(f"Broadcast button pressed by user {user_id}")
             bot_state.broadcast_state[user_id] = {"step": "waiting_msg"}
-            sent_msg = bot.send_message(user_id, "📢 Send your broadcast message:")
+            
+            # Show typing indicator
+            show_typing_indicator(user_id, 2)
+            
+            broadcast_prompt = f"""
+<b>📢 BROADCAST MESSAGE REQUEST</b>
+
+<blockquote><b>🚀 Ready to Broadcast!</b>
+• <b>Status:</b> {create_loading_animation(0)}
+• <b>Action:</b> Send your message now
+• <b>Features:</b> Auto-repost & delete available</blockquote>
+
+<b>💡 Send your message to start broadcasting</b>
+            """
+            sent_msg = bot.send_message(user_id, broadcast_prompt, parse_mode="HTML")
             # Auto-delete broadcast prompt after 30 seconds
             if sent_msg:
                 threading.Timer(30, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
@@ -1732,9 +1871,9 @@ def callback_handler(call):
                 markup.add(types.InlineKeyboardButton("🔄 **AUTO REPOST**", callback_data="repost_yes"))
                 markup.row(
                     types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
-                    types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
-                    types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
-                    types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60")
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"),
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"),
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2")
                 )
                 markup.row(
                     types.InlineKeyboardButton("🕕 6h", callback_data="repost_360"),
@@ -1752,10 +1891,10 @@ def callback_handler(call):
                 # 🗑 AUTO DELETE SECTION (normal)
                 markup.add(types.InlineKeyboardButton("🗑 **AUTO DELETE**", callback_data="delete_yes"))
                 markup.row(
-                    types.InlineKeyboardButton("⚡ 5m", callback_data="delete_5"),
-                    types.InlineKeyboardButton("🔟 10m", callback_data="delete_10"),
-                    types.InlineKeyboardButton("🕒 30m", callback_data="delete_30"),
-                    types.InlineKeyboardButton("⏰ 1h", callback_data="delete_60")
+                    types.InlineKeyboardButton("⚡ 3m", callback_data="delete_3"),
+                    types.InlineKeyboardButton("🔟 2m", callback_data="delete_2"),
+                    types.InlineKeyboardButton("🕒 2m", callback_data="delete_2"),
+                    types.InlineKeyboardButton("⏰ 2m", callback_data="delete_2")
                 )
                 markup.row(
                     types.InlineKeyboardButton("🕕 6h", callback_data="delete_360"),
@@ -1783,16 +1922,13 @@ def callback_handler(call):
                     reply_markup=markup, 
                     parse_mode="Markdown"
                 )
-                bot.answer_callback_query(call.id, "✅ Auto repost enabled! Select time below.")
             except Exception as e:
                 logger.error(f"Failed to update message for repost_yes: {e}")
-                bot.answer_callback_query(call.id, "✅ Auto repost enabled! Select time below.")
             
         elif call.data == "repost_no":
             state["repost_time"] = None
             state["step"] = "repost_disabled"
             bot_state.broadcast_state[user_id] = state
-            bot.answer_callback_query(call.id, "❌ Auto repost disabled!")
 
         elif call.data == "delete_yes":
             # Update state and highlight delete time selection
@@ -1835,9 +1971,9 @@ def callback_handler(call):
                 markup.add(types.InlineKeyboardButton("🔄 **AUTO REPOST**", callback_data="repost_yes"))
                 markup.row(
                     types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
-                    types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
-                    types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
-                    types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60")
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"),
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"),
+                    types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2")
                 )
                 markup.row(
                     types.InlineKeyboardButton("🕕 6h", callback_data="repost_360"),
@@ -1855,10 +1991,10 @@ def callback_handler(call):
                 # 🗑 AUTO DELETE SECTION (highlighted)
                 markup.add(types.InlineKeyboardButton("🗑 **AUTO DELETE**", callback_data="delete_yes"))
                 markup.row(
-                    types.InlineKeyboardButton("⚡ 5m", callback_data="delete_5"),
-                    types.InlineKeyboardButton("🔟 10m", callback_data="delete_10"),
-                    types.InlineKeyboardButton("🕒 30m", callback_data="delete_30"),
-                    types.InlineKeyboardButton("⏰ 1h", callback_data="delete_60")
+                    types.InlineKeyboardButton("⚡ 3m", callback_data="delete_3"),
+                    types.InlineKeyboardButton("🔟 2m", callback_data="delete_2"),
+                    types.InlineKeyboardButton("🕒 2m", callback_data="delete_2"),
+                    types.InlineKeyboardButton("⏰ 2m", callback_data="delete_2")
                 )
                 markup.row(
                     types.InlineKeyboardButton("🕕 6h", callback_data="delete_360"),
@@ -1886,16 +2022,113 @@ def callback_handler(call):
                     reply_markup=markup, 
                     parse_mode="Markdown"
                 )
-                bot.answer_callback_query(call.id, "✅ Auto delete enabled! Select time below.")
             except Exception as e:
                 logger.error(f"Failed to update message for delete_yes: {e}")
-                bot.answer_callback_query(call.id, "✅ Auto delete enabled! Select time below.")
             
         elif call.data == "delete_no":
             state["delete_time"] = None
             state["step"] = "delete_disabled"
             bot_state.broadcast_state[user_id] = state
-            bot.answer_callback_query(call.id, "❌ Auto delete disabled!")
+
+        elif call.data == "set_repost_time":
+            # Show auto repost time selection
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"))
+            markup.add(types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"))
+            markup.add(types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"))
+            markup.add(types.InlineKeyboardButton("⏱ 2m", callback_data="repost_2"))
+            markup.add(types.InlineKeyboardButton("🕕 6h", callback_data="repost_360"))
+            markup.add(types.InlineKeyboardButton("🌙 12h", callback_data="repost_720"))
+            markup.add(types.InlineKeyboardButton("📅 1d", callback_data="repost_1440"))
+            markup.add(types.InlineKeyboardButton("📆 2d", callback_data="repost_2880"))
+            markup.add(types.InlineKeyboardButton("🎯 Custom Time", callback_data="repost_custom"))
+            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config"))
+            
+            repost_text = f"""
+<b>🔄 AUTO REPOST TIME SELECTION</b>
+
+<blockquote><b>⏰ Choose Repost Interval</b>
+Your message will be automatically reposted at the selected interval</blockquote>
+
+<b>💡 Select a time option:</b>
+            """
+            bot.edit_message_text(repost_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif call.data == "set_delete_time":
+            # Show auto delete time selection
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(types.InlineKeyboardButton("⚡ 3m", callback_data="delete_3"))
+            markup.add(types.InlineKeyboardButton("🔟 2m", callback_data="delete_2"))
+            markup.add(types.InlineKeyboardButton("🕒 2m", callback_data="delete_2"))
+            markup.add(types.InlineKeyboardButton("⏰ 2m", callback_data="delete_2"))
+            markup.add(types.InlineKeyboardButton("🕕 6h", callback_data="delete_360"))
+            markup.add(types.InlineKeyboardButton("🌙 12h", callback_data="delete_720"))
+            markup.add(types.InlineKeyboardButton("📅 1d", callback_data="delete_1440"))
+            markup.add(types.InlineKeyboardButton("📆 2d", callback_data="delete_2880"))
+            markup.add(types.InlineKeyboardButton("🎯 Custom Time", callback_data="delete_custom"))
+            markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config"))
+            
+            delete_text = f"""
+<b>🗑 AUTO DELETE TIME SELECTION</b>
+
+<blockquote><b>⏰ Choose Delete Time</b>
+Your message will be automatically deleted after the selected time</blockquote>
+
+<b>💡 Select a time option:</b>
+            """
+            bot.edit_message_text(delete_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif call.data == "send_now":
+            # Send broadcast immediately without auto features
+            state["repost_time"] = None
+            state["delete_time"] = None
+            bot_state.broadcast_state[user_id] = state
+            finish_advanced_broadcast(user_id)
+
+        elif call.data == "advanced_settings":
+            # Show advanced settings
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔄 Set Repost", callback_data="set_repost_time"),
+                types.InlineKeyboardButton("🗑 Set Delete", callback_data="set_delete_time")
+            )
+            markup.add(
+                types.InlineKeyboardButton("📤 Send Now", callback_data="send_now"),
+                types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config")
+            )
+            
+            advanced_text = f"""
+<b>⚙️ ADVANCED BROADCAST SETTINGS</b>
+
+<blockquote><b>🔧 Configure Auto Features</b>
+• <b>Auto Repost:</b> {'✅ Set' if state.get('repost_time') else '❌ Not Set'}
+• <b>Auto Delete:</b> {'✅ Set' if state.get('delete_time') else '❌ Not Set'}</blockquote>
+
+<b>💡 Choose an option:</b>
+            """
+            bot.edit_message_text(advanced_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif call.data == "back_to_config":
+            # Return to main configuration
+            markup = types.InlineKeyboardMarkup(row_width=2)
+            markup.add(
+                types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"),
+                types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time")
+            )
+            markup.add(
+                types.InlineKeyboardButton("📤 Send Now (No Auto)", callback_data="send_now"),
+                types.InlineKeyboardButton("⚙️ Advanced Settings", callback_data="advanced_settings")
+            )
+            
+            config_text = f"""
+<b>📢 BROADCAST CONFIGURATION</b>
+
+<blockquote><b>⚙️ CONFIGURE YOUR BROADCAST</b>
+Set up auto-repost and auto-delete settings for your message</blockquote>
+
+<b>💡 Choose an option:</b>
+            """
+            bot.edit_message_text(config_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
         elif call.data.startswith("repost_"):
             time_value = int(call.data.replace("repost_", ""))
@@ -1903,43 +2136,191 @@ def callback_handler(call):
             state["step"] = "repost_time_selected"
             bot_state.broadcast_state[user_id] = state
             bot.answer_callback_query(call.id, f"✅ Auto repost set to {time_value} minutes!")
+            
+            # Check if both settings are configured
+            if state.get("repost_time") and state.get("delete_time"):
+                # Both are set, show final confirmation
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🚀 Start Broadcast", callback_data="start_broadcast"),
+                    types.InlineKeyboardButton("⚙️ Change Settings", callback_data="advanced_settings")
+                )
+                
+                final_text = f"""
+<b>🎯 BROADCAST READY!</b>
+
+<blockquote><b>✅ CONFIGURATION COMPLETE</b>
+• <b>Auto Repost:</b> {state.get('repost_time')} minutes
+• <b>Auto Delete:</b> {state.get('delete_time')} minutes</blockquote>
+
+<b>🚀 Ready to broadcast!</b>
+                """
+                bot.edit_message_text(final_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+            else:
+                # Show current status
+                markup = types.InlineKeyboardMarkup(row_width=2)
+                markup.add(
+                    types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time"),
+                    types.InlineKeyboardButton("📤 Send Now", callback_data="send_now")
+                )
+                markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config"))
+                
+                status_text = f"""
+<b>🔄 AUTO REPOST SET!</b>
+
+<blockquote><b>✅ REPOST CONFIGURED</b>
+• <b>Auto Repost:</b> {time_value} minutes
+• <b>Auto Delete:</b> {'✅ Set' if state.get('delete_time') else '❌ Not Set'}</blockquote>
+
+<b>💡 Next step:</b>
+                """
+                bot.edit_message_text(status_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
         elif call.data.startswith("delete_"):
             if call.data == "delete_custom":
                 # Handle custom delete time
                 state["step"] = "ask_delete_custom_time"
                 bot_state.broadcast_state[user_id] = state
-                bot.send_message(user_id, "🎯 **Custom Auto Delete Time**\n\nEnter the time in minutes (1-43200):\n\n💡 **Examples:**\n• 15 = 15 minutes\n• 120 = 2 hours\n• 1440 = 1 day\n• 10080 = 1 week")
-                bot.answer_callback_query(call.id, "🎯 Enter custom delete time!")
-            else:
-                time_value = int(call.data.replace("delete_", ""))
-                state["delete_time"] = time_value
-                state["step"] = "delete_time_selected"
-                bot_state.broadcast_state[user_id] = state
-                bot.answer_callback_query(call.id, f"✅ Auto delete set to {time_value} minutes!")
+                custom_text = f"""
+<b>🎯 CUSTOM AUTO DELETE TIME</b>
+
+<blockquote><b>⏰ Enter Delete Time</b>
+Enter the time in minutes (1-43200)</blockquote>
+
+<b>💡 Examples:</b>
+• 15 = 15 minutes
+• 120 = 2 hours  
+• 1440 = 1 day
+• 10080 = 1 week
+                """
+                sent_msg = bot.send_message(user_id, custom_text, parse_mode="HTML")
+                # Auto-delete the prompt after 60 seconds
+                if sent_msg:
+                    threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+            elif call.data != "delete_custom":
+                try:
+                    time_value = int(call.data.replace("delete_", ""))
+                    state["delete_time"] = time_value
+                    state["step"] = "delete_time_selected"
+                    bot_state.broadcast_state[user_id] = state
+                except ValueError:
+                    logger.error(f"Invalid delete time value: {call.data}")
                 
-                # If both repost and delete are set, finish the broadcast
+                # Check if both settings are configured
                 if state.get("repost_time") and state.get("delete_time"):
-                    finish_advanced_broadcast(user_id)
+                    # Both are set, show final confirmation
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    markup.add(
+                        types.InlineKeyboardButton("🚀 Start Broadcast", callback_data="start_broadcast"),
+                        types.InlineKeyboardButton("⚙️ Change Settings", callback_data="advanced_settings")
+                    )
+                    
+                    final_text = f"""
+<b>🎯 BROADCAST READY!</b>
+
+<blockquote><b>✅ CONFIGURATION COMPLETE</b>
+• <b>Auto Repost:</b> {state.get('repost_time')} minutes
+• <b>Auto Delete:</b> {state.get('delete_time')} minutes</blockquote>
+
+<b>🚀 Ready to broadcast!</b>
+                    """
+                    bot.edit_message_text(final_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+                else:
+                    # Show current status
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    markup.add(
+                        types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"),
+                        types.InlineKeyboardButton("📤 Send Now", callback_data="send_now")
+                    )
+                    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config"))
+                    
+                    status_text = f"""
+<b>🗑 AUTO DELETE SET!</b>
+
+<blockquote><b>✅ DELETE CONFIGURED</b>
+• <b>Auto Repost:</b> {'✅ Set' if state.get('repost_time') else '❌ Not Set'}
+• <b>Auto Delete:</b> {time_value} minutes</blockquote>
+
+<b>💡 Next step:</b>
+                    """
+                    bot.edit_message_text(status_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+
+        elif call.data == "start_broadcast":
+            # Start the broadcast with configured settings
+            finish_advanced_broadcast(user_id)
 
         elif call.data.startswith("repost_"):
             if call.data == "repost_custom":
                 # Handle custom repost time
                 state["step"] = "ask_repost_custom_time"
                 bot_state.broadcast_state[user_id] = state
-                bot.send_message(user_id, "🎯 **Custom Auto Repost Time**\n\nEnter the time in minutes (1-43200):\n\n💡 **Examples:**\n• 15 = 15 minutes\n• 120 = 2 hours\n• 1440 = 1 day\n• 10080 = 1 week")
-                bot.answer_callback_query(call.id, "🎯 Enter custom repost time!")
-            else:
-                time_value = int(call.data.replace("repost_", ""))
-                state["repost_time"] = time_value
-                state["step"] = "repost_time_selected"
-                bot_state.broadcast_state[user_id] = state
-                bot.answer_callback_query(call.id, f"✅ Auto repost set to {time_value} minutes!")
+                custom_text = f"""
+<b>🎯 CUSTOM AUTO REPOST TIME</b>
+
+<blockquote><b>⏰ Enter Repost Time</b>
+Enter the time in minutes (1-43200)</blockquote>
+
+<b>💡 Examples:</b>
+• 15 = 15 minutes
+• 120 = 2 hours
+• 1440 = 1 day
+• 10080 = 1 week
+                """
+                sent_msg = bot.send_message(user_id, custom_text, parse_mode="HTML")
+                # Auto-delete the prompt after 60 seconds
+                if sent_msg:
+                    threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
+            elif call.data != "repost_custom":
+                try:
+                    time_value = int(call.data.replace("repost_", ""))
+                    state["repost_time"] = time_value
+                    state["step"] = "repost_time_selected"
+                    bot_state.broadcast_state[user_id] = state
+                except ValueError:
+                    logger.error(f"Invalid repost time value: {call.data}")
+                
+                # Check if both settings are configured
+                if state.get("repost_time") and state.get("delete_time"):
+                    # Both are set, show final confirmation
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    markup.add(
+                        types.InlineKeyboardButton("🚀 Start Broadcast", callback_data="start_broadcast"),
+                        types.InlineKeyboardButton("⚙️ Change Settings", callback_data="advanced_settings")
+                    )
+                    
+                    final_text = f"""
+<b>🎯 BROADCAST READY!</b>
+
+<blockquote><b>✅ CONFIGURATION COMPLETE</b>
+• <b>Auto Repost:</b> {state.get('repost_time')} minutes
+• <b>Auto Delete:</b> {state.get('delete_time')} minutes</blockquote>
+
+<b>🚀 Ready to broadcast!</b>
+                    """
+                    bot.edit_message_text(final_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
+                else:
+                    # Show current status
+                    markup = types.InlineKeyboardMarkup(row_width=2)
+                    markup.add(
+                        types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time"),
+                        types.InlineKeyboardButton("📤 Send Now", callback_data="send_now")
+                    )
+                    markup.add(types.InlineKeyboardButton("🔙 Back", callback_data="back_to_config"))
+                    
+                    status_text = f"""
+<b>🔄 AUTO REPOST SET!</b>
+
+<blockquote><b>✅ REPOST CONFIGURED</b>
+• <b>Auto Repost:</b> {time_value} minutes
+• <b>Auto Delete:</b> {'✅ Set' if state.get('delete_time') else '❌ Not Set'}</blockquote>
+
+<b>💡 Next step:</b>
+                    """
+                    bot.edit_message_text(status_text, user_id, call.message.message_id, reply_markup=markup, parse_mode="HTML")
 
         elif call.data == "separator":
             # Separator button - do nothing
-            bot.answer_callback_query(call.id, "")
-            
+            pass
         elif call.data == "stop_repost":
             # Stop repost for this user
             if user_id in bot_state.active_reposts:
@@ -2170,7 +2551,7 @@ def callback_handler(call):
 
 **💎 Subscription:**
 • Type: `{analytics.get('subscription_type', 'Free').title()}`
-• Status: {'🟢 Active' if broadcast_bot.is_premium(user_id) else '🔶 Free'}
+• Status: 🔶 Free
             """
             bot.send_message(user_id, stats_text, parse_mode="Markdown")
 
@@ -2204,111 +2585,9 @@ def callback_handler(call):
             """
             bot.send_message(user_id, settings_text, parse_mode="Markdown")
 
-        elif call.data == "admin_panel" and broadcast_bot.is_admin(user_id):
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("📊 System Analytics", callback_data="admin_analytics"),
-                types.InlineKeyboardButton("👥 User Management", callback_data="admin_users"),
-                types.InlineKeyboardButton("🔧 System Settings", callback_data="admin_settings"),
-                types.InlineKeyboardButton("📋 Broadcast Logs", callback_data="admin_logs"),
-                types.InlineKeyboardButton("🔄 Restart Bot", callback_data="admin_restart"),
-                types.InlineKeyboardButton("❌ Close Panel", callback_data="admin_close"),
-            )
-            bot.send_message(
-                user_id,
-                "🔧 **Admin Panel**\n\nSelect an option:",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
 
-        elif call.data == "admin_analytics" and broadcast_bot.is_admin(user_id):
-            today = datetime.now().strftime('%Y-%m-%d')
-            analytics = broadcast_bot.analytics_col.find_one({"date": today})
-            
-            if analytics:
-                admin_stats = f"""
-🔧 **System Analytics - {today}**
 
-**📊 Today's Stats:**
-• Total Broadcasts: `{analytics.get('total_broadcasts', 0)}`
-• Messages Sent: `{analytics.get('total_messages_sent', 0)}`
-• Active Users: `{broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})}`
-• New Channels: `{analytics.get('new_channels_added', 0)}`
-• Auto Reposts: `{analytics.get('auto_reposts', 0)}`
-• Auto Deletes: `{analytics.get('auto_deletes', 0)}`
-• Failed Broadcasts: `{analytics.get('failed_broadcasts', 0)}`
 
-**📈 Overall Stats:**
-• Total Users: `{broadcast_bot.users_col.count_documents({})}`
-• Total Channels: `{broadcast_bot.channels_col.count_documents({})}`
-• Premium Users: `{broadcast_bot.users_col.count_documents({'is_premium': True})}`
-                """
-                bot.send_message(user_id, admin_stats, parse_mode="Markdown")
-            else:
-                bot.send_message(user_id, "❌ No analytics data found!")
-
-        elif call.data == "admin_users" and broadcast_bot.is_admin(user_id):
-            total_users = broadcast_bot.users_col.count_documents({})
-            active_users = broadcast_bot.users_col.count_documents({'last_active': {'$gte': datetime.now() - timedelta(days=1)}})
-            premium_users = broadcast_bot.users_col.count_documents({'is_premium': True})
-            expired_premium = len(broadcast_bot.get_expired_premium_users())
-            
-            users_text = f"""
-👥 **User Management**
-
-**📊 User Statistics:**
-• Total Users: `{total_users}`
-• Active Users (24h): `{active_users}`
-• Premium Users: `{premium_users}`
-• Expired Premium: `{expired_premium}`
-• Free Users: `{total_users - premium_users}`
-
-**🔧 Owner Actions:**
-• Make users premium (Owner Only)
-• Remove premium access (Owner Only)
-• View premium statistics
-            """
-            
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            if str(user_id) == OWNER_ID:
-                markup.add(
-                    types.InlineKeyboardButton("💎 Make Premium", callback_data="admin_make_premium"),
-                    types.InlineKeyboardButton("🗑 Remove Premium", callback_data="admin_remove_premium"),
-                )
-            markup.add(
-                types.InlineKeyboardButton("📊 Premium Stats", callback_data="admin_premium_stats"),
-            )
-            bot.send_message(user_id, users_text, reply_markup=markup, parse_mode="Markdown")
-
-        elif call.data == "admin_settings" and broadcast_bot.is_admin(user_id):
-            settings_text = f"""
-🔧 **System Settings**
-
-**⚙️ Current Configuration:**
-• BOT_TOKEN: ✅ Configured
-• MONGO_URL: ✅ Connected
-• MAX_CHANNELS_PER_USER: `{MAX_CHANNELS_PER_USER}`
-• BROADCAST_DELAY: `{BROADCAST_DELAY}s`
-• AUTO_DELETE_OPTIONS: Available
-• AUTO_REPOST_OPTIONS: Available
-
-**🔧 System Status:**
-• Bot: ✅ Online
-• Database: ✅ Connected
-• Analytics: ✅ Active
-            """
-            bot.send_message(user_id, settings_text, parse_mode="Markdown")
-
-        elif call.data == "admin_logs" and broadcast_bot.is_admin(user_id):
-            bot.send_message(user_id, "📋 **Broadcast Logs**\n\nCheck bot.log file for detailed logs.")
-
-        elif call.data == "admin_restart" and broadcast_bot.is_admin(user_id):
-            bot.send_message(user_id, "🔄 **Restarting Bot...**\n\nBot will restart in 3 seconds.")
-            time.sleep(3)
-            os._exit(0)
-
-        elif call.data == "admin_close" and broadcast_bot.is_admin(user_id):
-            bot.send_message(user_id, "❌ **Admin Panel Closed**")
 
         elif call.data == "remove_channel":
             channels = broadcast_bot.get_all_channels(user_id)
@@ -2343,48 +2622,12 @@ def callback_handler(call):
         elif call.data == "contact_admin":
             bot.send_message(user_id, "ℹ️ Contact owner not required. Bot is free to use.")
 
-        elif call.data == "admin_make_premium" and broadcast_bot.is_admin(user_id):
-            if str(user_id) != OWNER_ID:
-                bot.send_message(user_id, "ℹ️ Premium mode disabled. No activation required.")
-                return
-                
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            markup.add(
-                types.InlineKeyboardButton("1 Month", callback_data="premium_30"),
-                types.InlineKeyboardButton("3 Months", callback_data="premium_90"),
-                types.InlineKeyboardButton("6 Months", callback_data="premium_180"),
-                types.InlineKeyboardButton("1 Year", callback_data="premium_365"),
-            )
-            bot.send_message(
-                user_id,
-                "💎 **Owner Premium Activation**\n\nSend user ID to make premium:",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-        elif call.data.startswith("premium_") and broadcast_bot.is_admin(user_id):
-            if str(user_id) != OWNER_ID:
-                bot.send_message(user_id, "ℹ️ Premium mode disabled. No activation required.")
-                return
-                
-            days = int(call.data.replace("premium_", ""))
-            bot.send_message(user_id, "ℹ️ Premium mode disabled. No activation required.")
-
-        elif call.data == "admin_remove_premium" and broadcast_bot.is_admin(user_id):
-            if str(user_id) != OWNER_ID:
-                bot.send_message(user_id, "ℹ️ Premium mode disabled. No removal needed.")
-                return
-            bot.send_message(user_id, "ℹ️ Premium mode disabled. No removal needed.")
-
-        elif call.data == "admin_premium_stats" and broadcast_bot.is_admin(user_id):
-            bot.send_message(user_id, "ℹ️ Premium mode disabled. No stats available.")
 
         elif call.data == "cleanup_all_messages":
-                
             # Delete all broadcast messages
             deleted_count = 0
             failed_count = 0
-            
+
             try:
                 # Get all broadcast messages for this user
                 broadcast_messages = broadcast_bot.get_broadcast_messages(user_id, 1000)
@@ -2434,13 +2677,12 @@ def callback_handler(call):
 ✅ **All broadcast messages have been removed from channels.**
                 """
                 bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
-                
+
             except Exception as e:
                 logger.error(f"Error in cleanup_all_messages: {e}")
                 bot.send_message(user_id, "❌ Error during message cleanup process")
 
         elif call.data == "cleanup_stop_reposts":
-                
             # Stop all reposts
             if user_id in bot_state.active_reposts:
                 bot_state.active_reposts[user_id]["stop"] = True
@@ -2455,7 +2697,6 @@ def callback_handler(call):
                 bot.send_message(user_id, "⚠️ No active auto reposts found.")
 
         elif call.data == "cleanup_everything":
-                
             # Stop all reposts
             if user_id in bot_state.active_reposts:
                 bot_state.active_reposts[user_id]["stop"] = True
@@ -2594,7 +2835,10 @@ def callback_handler(call):
                     del bot_state.active_broadcasts[user_id]
                 
                 # Get all broadcast messages for this user and delete them
-                broadcast_messages = list(broadcast_bot.broadcast_messages_col.find({"user_id": user_id}))
+                if broadcast_bot.broadcast_messages_col is not None:
+                    broadcast_messages = list(broadcast_bot.broadcast_messages_col.find({"user_id": user_id}))
+                else:
+                    broadcast_messages = []
                 
                 status_msg = bot.send_message(
                     user_id,
@@ -2605,22 +2849,43 @@ def callback_handler(call):
                 )
                 
                 deleted_count = 0
+                already_deleted_count = 0
+                no_permission_count = 0
                 failed_count = 0
+                failed_channels = []
                 
                 for msg_doc in broadcast_messages:
                     try:
-                        bot.delete_message(msg_doc["channel_id"], msg_doc["message_id"])
-                        deleted_count += 1
+                        result = bot.delete_message(msg_doc["channel_id"], msg_doc["message_id"])
+                        if result:
+                            deleted_count += 1
+                        else:
+                            already_deleted_count += 1
                         
-                        # Remove from database
-                        broadcast_bot.broadcast_messages_col.delete_one({"_id": msg_doc["_id"]})
+                        # Remove from database regardless of deletion result
+                        if broadcast_bot.broadcast_messages_col is not None:
+                            broadcast_bot.broadcast_messages_col.delete_one({"_id": msg_doc["_id"]})
                         
                     except Exception as e:
-                        failed_count += 1
-                        logger.error(f"Failed to delete message {msg_doc['message_id']} from {msg_doc['channel_id']}: {e}")
+                        error_msg = str(e).lower()
+                        
+                        # Classify the error
+                        if "message to delete not found" in error_msg or "message not found" in error_msg:
+                            already_deleted_count += 1
+                            # Still remove from database since message doesn't exist
+                            if broadcast_bot.broadcast_messages_col is not None:
+                                broadcast_bot.broadcast_messages_col.delete_one({"_id": msg_doc["_id"]})
+                        elif "forbidden" in error_msg or "not enough rights" in error_msg or "no permission" in error_msg:
+                            no_permission_count += 1
+                            failed_channels.append(str(msg_doc["channel_id"]))
+                        else:
+                            failed_count += 1
+                            failed_channels.append(str(msg_doc["channel_id"]))
+                            logger.warning(f"Failed to delete message {msg_doc['message_id']} from {msg_doc['channel_id']}: {e}")
                 
                 # Clear scheduled tasks for this user
-                broadcast_bot.scheduled_broadcasts_col.delete_many({"user_id": user_id})
+                if broadcast_bot.scheduled_broadcasts_col is not None:
+                    broadcast_bot.scheduled_broadcasts_col.delete_many({"user_id": user_id})
                 
                 # Update status
                 result_text = f"""
@@ -2628,12 +2893,20 @@ def callback_handler(call):
 
 **📊 Results:**
 • ✅ **Deleted:** {deleted_count} messages
+• 🗑 **Already Deleted:** {already_deleted_count} messages
+• 🚫 **No Permission:** {no_permission_count} messages
 • ❌ **Failed:** {failed_count} messages
 • 🧹 **Cleared:** All scheduled tasks
 • ⏹ **Stopped:** All active reposts
 
 **🎯 All operations completed!**
                 """
+                
+                if no_permission_count > 0 or failed_count > 0:
+                    failed_list = ', '.join(set(failed_channels[:10]))
+                    if len(set(failed_channels)) > 10:
+                        failed_list += f" and {len(set(failed_channels)) - 10} more"
+                    result_text += f"\n\n🚫 **Channels with Issues:**\n`{failed_list}`"
                 
                 bot.edit_message_text(result_text, user_id, status_msg.message_id, parse_mode="Markdown")
                 
@@ -2648,10 +2921,6 @@ def callback_handler(call):
             bot.send_message(user_id, "❌ Stop operation cancelled.")
 
         elif call.data == "cleanup_menu":
-            if not (broadcast_bot.is_premium(user_id) or broadcast_bot.is_admin(user_id)):
-                bot.answer_callback_query(call.id, "🔒 Premium Required!")
-                return
-                
             markup = types.InlineKeyboardMarkup(row_width=2)
             markup.add(
                 types.InlineKeyboardButton("🗑 Delete All Messages", callback_data="cleanup_all_messages"),
@@ -2680,17 +2949,55 @@ def callback_handler(call):
     except Exception as e:
         logger.error(f"Callback error: {e}")
 
+def create_broadcast_config_ui(user_id: int, message, added_channels: list = None) -> tuple:
+    """Create clean broadcast configuration UI"""
+    original_text = message.text or message.caption or ""
+    
+    # Create message text
+    message_text = "📢 **Broadcast Configuration**\n\n"
+    
+    if added_channels:
+        channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
+        message_text += f"✅ **Auto-added {len(added_channels)} channels:**\n{channel_list}\n\n"
+        
+        original_links = extract_telegram_links(original_text)
+        if original_links:
+            links_text = "\n".join([f"🔗 `{link}`" for link in original_links])
+            message_text += f"🔍 **Detected Links:**\n{links_text}\n\n"
+
+    if original_text:
+        preview_text = original_text[:100] + "..." if len(original_text) > 100 else original_text
+        message_text += f"📝 **Broadcast Text:**\n`{preview_text}`\n\n"
+
+    message_text += "⚙️ **Configure your broadcast:**\n\n"
+
+    # Create clean markup
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    
+    # Main options
+    markup.add(
+        types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"),
+        types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time")
+    )
+    markup.add(
+        types.InlineKeyboardButton("📤 Send Now (No Auto)", callback_data="send_now"),
+        types.InlineKeyboardButton("⚙️ Advanced Settings", callback_data="advanced_settings")
+    )
+    
+    return message_text, markup
+
 def start_broadcast_flow_from_message(user_id: int, message):
-    """Start broadcast flow directly from an incoming message with improved UI."""
+    """Start broadcast flow directly from an incoming message with clean UI."""
     logger.info(f"Starting broadcast flow for user {user_id}, content_type: {message.content_type}")
     
     state = bot_state.broadcast_state.get(user_id, {})
     state["message"] = message
-    state["step"] = "ask_repost"
+    state["step"] = "configuring"
 
     original_text = message.text or message.caption or ""
     logger.info(f"Original text: {original_text[:50]}...")
 
+    # Auto-add channels
     added_channels = []
     if original_text:
         try:
@@ -2703,88 +3010,16 @@ def start_broadcast_flow_from_message(user_id: int, message):
     state["format_type"] = "plain"
     bot_state.broadcast_state[user_id] = state
 
-    # Create improved message with better formatting
-    message_text = "📢 **Broadcast Configuration**\n\n"
-    
-    if added_channels:
-        try:
-            channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
-            message_text += f"✅ **Auto-added {len(added_channels)} channels:**\n{channel_list}\n\n"
-            original_links = extract_telegram_links(original_text)
-            if original_links:
-                links_text = "\n".join([f"🔗 `{link}`" for link in original_links])
-                message_text += f"🔍 **Detected Links:**\n{links_text}\n\n"
-        except Exception as e:
-            logger.warning(f"compose channel info failed: {e}")
-
-    if original_text:
-        preview_text = original_text[:100] + "..." if len(original_text) > 100 else original_text
-        message_text += f"📝 **Broadcast Text:**\n`{preview_text}`\n\n"
-
-    message_text += "⚙️ **Configure your broadcast:**\n\n"
-
-    # Create improved markup with better organization
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    
-    # 🔄 AUTO REPOST SECTION
-    markup.add(types.InlineKeyboardButton("🔄 **AUTO REPOST**", callback_data="repost_yes"))
-    markup.row(
-        types.InlineKeyboardButton("⏱ 5m", callback_data="repost_5"),
-        types.InlineKeyboardButton("⏱ 10m", callback_data="repost_10"),
-        types.InlineKeyboardButton("⏱ 30m", callback_data="repost_30"),
-        types.InlineKeyboardButton("⏱ 1h", callback_data="repost_60")
-    )
-    markup.row(
-        types.InlineKeyboardButton("🕕 6h", callback_data="repost_360"),
-        types.InlineKeyboardButton("🌙 12h", callback_data="repost_720"),
-        types.InlineKeyboardButton("📅 1d", callback_data="repost_1440"),
-        types.InlineKeyboardButton("📆 2d", callback_data="repost_2880")
-    )
-    markup.row(
-        types.InlineKeyboardButton("🎯 Custom Repost Time", callback_data="repost_custom")
-    )
-    
-    # Separator
-    markup.add(types.InlineKeyboardButton("━━━━━━━━━━━━━━━━", callback_data="separator"))
-    
-    # 🗑 AUTO DELETE SECTION
-    markup.add(types.InlineKeyboardButton("🗑 **AUTO DELETE**", callback_data="delete_yes"))
-    markup.row(
-        types.InlineKeyboardButton("⚡ 5m", callback_data="delete_5"),
-        types.InlineKeyboardButton("🔟 10m", callback_data="delete_10"),
-        types.InlineKeyboardButton("🕒 30m", callback_data="delete_30"),
-        types.InlineKeyboardButton("⏰ 1h", callback_data="delete_60")
-    )
-    markup.row(
-        types.InlineKeyboardButton("🕕 6h", callback_data="delete_360"),
-        types.InlineKeyboardButton("🌙 12h", callback_data="delete_720"),
-        types.InlineKeyboardButton("📅 1d", callback_data="delete_1440"),
-        types.InlineKeyboardButton("📆 2d", callback_data="delete_2880")
-    )
-    markup.row(
-        types.InlineKeyboardButton("🎯 Custom Delete Time", callback_data="delete_custom")
-    )
-    
-    # Separator
-    markup.add(types.InlineKeyboardButton("━━━━━━━━━━━━━━━━", callback_data="separator"))
-    
-    # Quick actions
-    markup.row(
-        types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
-        types.InlineKeyboardButton("❌ No Delete", callback_data="delete_no")
-    )
-    
-    # Send now option
-    markup.add(types.InlineKeyboardButton("🚀 Send Now (No Auto)", callback_data="send_now"))
+    # Create clean UI
+    message_text, markup = create_broadcast_config_ui(user_id, message, added_channels)
 
     try:
         sent_msg = bot.send_message(user_id, message_text, reply_markup=markup, parse_mode="Markdown")
         if sent_msg:
             threading.Timer(120, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
-        logger.info(f"Consolidated broadcast flow message sent successfully to user {user_id}")
+        logger.info(f"Broadcast flow message sent successfully to user {user_id}")
     except Exception as e:
-        logger.error(f"Failed to send consolidated broadcast flow message to user {user_id}: {e}")
-        # Fallback: send simple message
+        logger.error(f"Failed to send broadcast flow message to user {user_id}: {e}")
         try:
             bot.send_message(user_id, "📢 Send your broadcast message:")
         except Exception as e2:
@@ -2797,6 +3032,86 @@ def handle_message(message):
     
     try:
         state = bot_state.broadcast_state.get(user_id)
+
+        # Handle custom time input
+        if state and state.get("step") in ["ask_repost_custom_time", "ask_delete_custom_time"]:
+            try:
+                time_input = message.text.strip()
+                if time_input.isdigit():
+                    time_value = int(time_input)
+                    if 1 <= time_value <= 43200:  # 1 minute to 30 days
+                        if state["step"] == "ask_repost_custom_time":
+                            state["repost_time"] = time_value
+                            state["step"] = "repost_time_selected"
+                            bot.send_message(user_id, f"✅ **Auto Repost set to {time_value} minutes!**", parse_mode="Markdown")
+                        else:  # ask_delete_custom_time
+                            state["delete_time"] = time_value
+                            state["step"] = "delete_time_selected"
+                            bot.send_message(user_id, f"✅ **Auto Delete set to {time_value} minutes!**", parse_mode="Markdown")
+                        
+                        bot_state.broadcast_state[user_id] = state
+                        
+                        # Delete the user's input message
+                        try:
+                            bot.delete_message(user_id, message.message_id)
+                        except:
+                            pass
+                        
+                        # Show next step or final confirmation
+                        if state.get("repost_time") and state.get("delete_time"):
+                            # Both are set, show final confirmation
+                            markup = types.InlineKeyboardMarkup(row_width=2)
+                            markup.add(
+                                types.InlineKeyboardButton("🚀 Start Broadcast", callback_data="start_broadcast"),
+                                types.InlineKeyboardButton("⚙️ Change Settings", callback_data="advanced_settings")
+                            )
+                            
+                            final_text = f"""
+<b>🎯 BROADCAST READY!</b>
+
+<blockquote><b>✅ CONFIGURATION COMPLETE</b>
+• <b>Auto Repost:</b> {state.get('repost_time')} minutes
+• <b>Auto Delete:</b> {state.get('delete_time')} minutes</blockquote>
+
+<b>🚀 Ready to broadcast!</b>
+                            """
+                            bot.send_message(user_id, final_text, reply_markup=markup, parse_mode="HTML")
+                        else:
+                            # Show current status
+                            markup = types.InlineKeyboardMarkup(row_width=2)
+                            if not state.get("repost_time"):
+                                markup.add(types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"))
+                            if not state.get("delete_time"):
+                                markup.add(types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time"))
+                            markup.add(types.InlineKeyboardButton("📤 Send Now", callback_data="send_now"))
+                            
+                            status_text = f"""
+<b>⚙️ BROADCAST CONFIGURATION</b>
+
+<blockquote><b>✅ CURRENT SETTINGS</b>
+• <b>Auto Repost:</b> {'✅ Set' if state.get('repost_time') else '❌ Not Set'}
+• <b>Auto Delete:</b> {'✅ Set' if state.get('delete_time') else '❌ Not Set'}</blockquote>
+
+<b>💡 Next step:</b>
+                            """
+                            bot.send_message(user_id, status_text, reply_markup=markup, parse_mode="HTML")
+                        
+                        return
+                    else:
+                        bot.send_message(user_id, "❌ **Invalid time!** Please enter a number between 1 and 43200 minutes.", parse_mode="Markdown")
+                else:
+                    bot.send_message(user_id, "❌ **Invalid input!** Please enter a number (in minutes).", parse_mode="Markdown")
+                
+                # Delete the user's input message
+                try:
+                    bot.delete_message(user_id, message.message_id)
+                except:
+                    pass
+                return
+            except Exception as e:
+                logger.error(f"Error handling custom time input: {e}")
+                bot.send_message(user_id, "❌ **Error processing input!** Please try again.", parse_mode="Markdown")
+                return
 
         # Auto-start broadcast flow if user sends text/media with caption in private chat
         if not state and message.chat.type == 'private' and (getattr(message, 'text', None) or getattr(message, 'caption', None) or message.content_type in ["photo", "video", "document"]):
@@ -2821,30 +3136,40 @@ def handle_message(message):
             state["formatted_text"] = original_text
             state["format_type"] = "plain"
             
-            # Go directly to repost question with improved UI
+            # Create enhanced broadcast configuration UI
             markup = types.InlineKeyboardMarkup(row_width=2)
+            
+            # Main configuration buttons
             markup.add(
-                types.InlineKeyboardButton("🔄 Yes, Auto Repost", callback_data="repost_yes"),
-                types.InlineKeyboardButton("❌ No Repost", callback_data="repost_no"),
+                types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"),
+                types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time")
+            )
+            markup.add(
+                types.InlineKeyboardButton("📤 Send Now (No Auto)", callback_data="send_now"),
+                types.InlineKeyboardButton("⚙️ Advanced Settings", callback_data="advanced_settings")
             )
             
             # Prepare message with auto-added channels info
-            repost_message = "🔄 **Would you like to set auto repost?**\n\nYour message will be automatically reposted at regular intervals:"
+            repost_message = (
+                f"<b>📢 BROADCAST CONFIGURATION</b>\n\n"
+                f"<blockquote><b>⚙️ CONFIGURE YOUR BROADCAST</b>\n"
+                f"Set up auto-repost and auto-delete settings for your message</blockquote>"
+            )
             
             if added_channels:
-                channel_list = "\n".join([f"• **{ch['channel_name']}** (@{ch['username'] or 'private'})" for ch in added_channels])
-                repost_message += f"\n\n✅ **Auto-added {len(added_channels)} channels:**\n{channel_list}"
+                channel_list = "\n".join([f"• <b>{ch['channel_name']}</b> (@{ch['username'] or 'private'})" for ch in added_channels])
+                repost_message += f"\n\n<b>✅ AUTO-ADDED {len(added_channels)} CHANNELS</b>\n<blockquote>{channel_list}</blockquote>"
                 
                 # Show original links that were detected
                 original_links = extract_telegram_links(original_text)
                 if original_links:
-                    links_text = "\n".join([f"🔗 `{link}`" for link in original_links])
-                    repost_message += f"\n\n🔍 **Detected Links:**\n{links_text}"
+                    links_text = "\n".join([f"🔗 <code>{link}</code>" for link in original_links])
+                    repost_message += f"\n\n<b>🔍 DETECTED LINKS</b>\n<blockquote>{links_text}</blockquote>"
                 
                 # Show what text will be broadcasted
                 if original_text:
                     preview_text = original_text[:100] + "..." if len(original_text) > 100 else original_text
-                    repost_message += f"\n\n📝 **Broadcast Text:**\n`{preview_text}`"
+                    repost_message += f"\n\n<b>📝 BROADCAST TEXT</b>\n<blockquote><code>{preview_text}</code></blockquote>"
             
             sent_msg = bot.send_message(
                 user_id, 
@@ -2857,7 +3182,7 @@ def handle_message(message):
                 threading.Timer(60, lambda: delete_message_safe(user_id, sent_msg.message_id)).start()
             return
 
-        elif state and state.get("step") == "add_single_channel":
+        if state and state.get("step") == "add_single_channel":
             # Handle single channel addition
             message_text = message.text or ""
             
@@ -2951,14 +3276,14 @@ def handle_message(message):
                 bot_state.broadcast_state[user_id] = {}
             return
 
-        elif state and state.get("step") == "bulk_add_waiting":
+        if state and state.get("step") == "bulk_add_waiting":
             # Handle bulk channel addition
             message_text = message.text or ""
             
             # Parse channel IDs and links
             lines = message_text.replace(',', '\n').split('\n')
             lines = [line.strip() for line in lines if line.strip()]
-            
+         
             added_channels = []
             failed_channels = []
             
@@ -2974,13 +3299,13 @@ def handle_message(message):
                                 "channel_name": channel_info.title,
                                 "username": getattr(channel_info, 'username', None)
                             })
-                    else:
-                        # Try to resolve as link
-                        resolved = resolve_telegram_link(line)
-                        if resolved:
-                            added_channels.append(resolved)
                         else:
-                            failed_channels.append(line)
+                            # Try to resolve as link
+                            resolved = resolve_telegram_link(line)
+                            if resolved:
+                                added_channels.append(resolved)
+                            else:
+                                failed_channels.append(line)
                 except Exception as e:
                     logger.warning(f"Failed to add channel {line}: {e}")
                     failed_channels.append(line)
@@ -3027,11 +3352,12 @@ def handle_message(message):
 def track_bot_message(user_id: int, message_id: int):
     """Track bot messages for later deletion"""
     try:
-        db.bot_messages.insert_one({
-            "user_id": user_id,
-            "message_id": message_id,
-            "timestamp": datetime.now()
-        })
+        if bot_messages_col is not None:
+            bot_messages_col.insert_one({
+                "user_id": user_id,
+                "message_id": message_id,
+                "timestamp": datetime.now()
+            })
     except Exception as e:
         logger.warning(f"Failed to track bot message: {e}")
 
@@ -3040,7 +3366,10 @@ def delete_bot_messages(user_id: int):
     deleted_count = 0
     try:
         # Get all tracked bot messages for this user
-        bot_messages = list(db.bot_messages.find({"user_id": user_id}))
+        if bot_messages_col is not None:
+            bot_messages = list(bot_messages_col.find({"user_id": user_id}))
+        else:
+            bot_messages = []
         
         for msg in bot_messages:
             try:
@@ -3051,8 +3380,9 @@ def delete_bot_messages(user_id: int):
                 pass
         
         # Clear tracked messages from database
-        db.bot_messages.delete_many({"user_id": user_id})
-        
+        if bot_messages_col is not None:
+            bot_messages_col.delete_many({"user_id": user_id})
+
     except Exception as e:
         logger.warning(f"Failed to delete bot messages: {e}")
     
@@ -3062,37 +3392,58 @@ if __name__ == "__main__":
     logger.info("Advanced Broadcast Bot starting...")
     
     try:
-        # Start background tasks
-        logger.info("Starting background tasks...")
+        # Start background tasks only if MongoDB is available
+        if broadcast_bot.scheduled_broadcasts_col is not None:
+            logger.info("Starting background tasks...")
+            
+            # Start scheduled broadcasts checker
+            import threading
+            scheduled_thread = threading.Thread(target=broadcast_bot.check_scheduled_broadcasts, daemon=True)
+            scheduled_thread.start()
+            logger.info("Scheduled broadcasts checker started")
+            
+            
+            # Update analytics on startup
+            try:
+                broadcast_bot.update_analytics("active_users", 0)
+                logger.info("Analytics updated successfully")
+            except Exception as e:
+                logger.error(f"Error updating analytics: {e}")
+        else:
+            logger.warning("MongoDB not available - running in limited mode")
         
-        # Start scheduled broadcasts checker
-        import threading
-        scheduled_thread = threading.Thread(target=broadcast_bot.check_scheduled_broadcasts, daemon=True)
-        scheduled_thread.start()
-        logger.info("Scheduled broadcasts checker started")
-        
-        # Start premium users checker
-        premium_thread = threading.Thread(target=broadcast_bot.check_expired_premium_users, daemon=True)
-        premium_thread.start()
-        logger.info("Premium users checker started")
-        
-        # Update analytics on startup
-        try:
-            broadcast_bot.update_analytics("active_users", 0)
-            logger.info("Analytics updated successfully")
-        except Exception as e:
-            logger.error(f"Error updating analytics: {e}")
-        
-        # Remove any existing webhook
+        # Remove any existing webhook (optional)
         try:
             bot.remove_webhook()
             logger.info("Webhook removed successfully")
         except Exception as e:
-            logger.warning(f"Failed to remove webhook: {e}")
+            logger.warning(f"Failed to remove webhook (continuing anyway): {e}")
         
-        # Start bot polling
+        # Start bot polling with retry mechanism
         logger.info("Starting bot polling...")
-        bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
+        
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
+                break
+            except Exception as e:
+                retry_count += 1
+                logger.error(f"Bot polling error (attempt {retry_count}/{max_retries}): {e}")
+                
+                if "409" in str(e) or "Conflict" in str(e):
+                    logger.warning("409 Conflict detected - another bot instance may be running")
+                    if retry_count < max_retries:
+                        logger.info(f"Waiting 10 seconds before retry {retry_count + 1}...")
+                        time.sleep(10)
+                    else:
+                        logger.error("Max retries reached. Please check if another bot instance is running.")
+                        break
+                else:
+                    logger.error(f"Unexpected error: {e}")
+                    break
         
     except Exception as e:
         logger.error(f"Bot crashed: {e}")
