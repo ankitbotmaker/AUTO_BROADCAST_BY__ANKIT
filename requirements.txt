@@ -1,9 +1,6 @@
 pyTelegramBotAPI==4.14.0
-pymongo==4.6.1
+pymongo==4.6.0
 python-dotenv==1.0.0
 requests==2.31.0
 schedule==1.2.0
-flask==3.0.0
-gunicorn==21.2.0
-pillow==10.2.0
-dnspython==2.4.2
+pytz==2023.3

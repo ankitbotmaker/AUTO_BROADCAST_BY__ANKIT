@@ -1,28 +1,39 @@
 {
   "name": "Advanced Telegram Broadcast Bot",
-  "description": "Advanced Telegram bot with auto repost, auto delete, and multi-channel management",
-  "repository": "https://github.com/ankitbotmaker/ankitbb",
-  "name": "broadcast725",
-  "logo": "https://img.icons8.com/color/96/000000/telegram-app.png",
-  "keywords": ["python", "telegram", "bot", "broadcast", "automation"],
+  "description": "A powerful FREE Telegram bot for broadcasting messages to multiple channels with advanced automation features - All features included!",
+  "repository": "https://github.com/ankitbotmaker/bbbot",
+  "logo": "https://i.ibb.co/GQrGd0MV/a101f4b2bfa4.jpg",
+  "keywords": ["telegram", "bot", "broadcast", "automation", "channels", "free", "unlimited"],
   "env": {
     "BOT_TOKEN": {
-      "description": "Your Telegram Bot Token",
-      "value": "8363735141:AAFKSuC-Ptjm0xKSJUJdxrkaex2CmQZ34vI"
+      "description": "Your Telegram Bot Token from @BotFather",
+      "required": true
     },
     "MONGO_URL": {
-      "description": "Your MongoDB Connection URL",
-      "value": "mongodb+srv://rowojo2049:bga4FhmFXj2GTM5B@cluster0.ggmw5h8.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+      "description": "Your MongoDB connection string",
+      "required": true
     },
     "ADMIN_IDS": {
-      "description": "Admin User IDs (comma separated)",
-      "value": "7792539085"
+      "description": "Comma-separated list of admin user IDs",
+      "required": true
+    },
+    "OWNER_ID": {
+      "description": "Bot owner user ID for premium activation",
+      "required": true
+    },
+    "API_ID": {
+      "description": "Telegram API ID (optional)",
+      "required": false
+    },
+    "API_HASH": {
+      "description": "Telegram API Hash (optional)",
+      "required": false
     }
   },
   "formation": {
     "worker": {
       "quantity": 1,
-      "size": "basic"
+      "size": "free"
     }
   },
   "buildpacks": [

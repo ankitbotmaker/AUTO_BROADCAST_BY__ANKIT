@@ -1,36 +1,58 @@
-# 🚀 Advanced Telegram Broadcast Bot
+# 🚀 Advanced Telegram Broadcast Bot v3.0
 
-A powerful and feature-rich Telegram bot for broadcasting messages to multiple channels with advanced automation features.
+A powerful and feature-rich Telegram bot for broadcasting messages to multiple channels with advanced automation features, built with a modern plugin architecture.
 
 ## ✨ Features
 
 ### 🎯 Core Features
 - **📢 Multi-Channel Broadcasting** - Send messages to multiple channels at once
 - **⚡ Auto Repost & Delete** - Automated reposting and deletion with custom intervals
+- **🔗 Auto Link Detection** - Automatically detect and add channels from Telegram links
+- **📊 Advanced Analytics** - Detailed broadcast statistics and performance tracking
 - **🛑 Instant Stop All** - Emergency stop for all broadcasts and reposts
 - **🧹 Auto Cleanup System** - Complete cleanup of messages and reposts
 - **📋 Bulk Channel Management** - Add up to 100 channels at once
 - **🆔 ID Command** - Get channel/user IDs quickly with `/id`
 
-### 💎 Premium Features
-- **👑 Owner-Only Premium System** - Only bot owner can activate premium
-- **📊 Advanced Analytics** - Detailed broadcast statistics
-- **⏰ Scheduled Broadcasts** - Schedule future broadcasts
+### 🎉 Free Features (No Premium Required!)
 - **📈 Real-time Monitoring** - Live broadcast progress tracking
+- **⏰ Scheduled Broadcasts** - Schedule future broadcasts
 - **🎨 Multi-media Support** - Photos, videos, documents, and text
 - **⏱ Custom Auto Delete Times** - Set any time from 1 minute to 30 days
+- **📊 Enhanced Analytics** - Detailed statistics for everyone
+- **🔗 Auto Link Detection** - Automatically add channels from links
+- **🎨 Message Templates** - Pre-built message formats
 
 ### 🔧 Admin Features
 - **👨‍💼 Admin Panel** - Complete admin control interface
 - **📊 User Management** - View and manage all users
-- **💎 Premium Management** - Activate/deactivate premium users
 - **📈 System Analytics** - Bot performance and usage statistics
 - **🔄 System Controls** - Restart bot, view logs, system settings
+
+## 🏗️ Architecture
+
+### Plugin-Based Structure
+```
+plugins/
+├── core/           # Core bot functionality
+├── handlers/       # Message and callback handlers
+├── utils/          # Utility functions and helpers
+├── database/       # Database operations and models
+└── broadcast/      # Broadcasting functionality
+```
+
+### Key Components
+- **Database Layer** - MongoDB with connection pooling and error recovery
+- **Broadcast Manager** - Concurrent message processing with thread pools
+- **Link Handler** - Advanced Telegram link detection and resolution
+- **Message Formatter** - HTML/Markdown conversion and text processing
+- **Validators** - Comprehensive input validation
+- **Analytics** - Performance tracking and statistics
 
 ## 🚀 Quick Start
 
 ### 1. Prerequisites
-- Python 3.8+
+- Python 3.9+
 - MongoDB Database
 - Telegram Bot Token
 
@@ -38,28 +60,31 @@ A powerful and feature-rich Telegram bot for broadcasting messages to multiple c
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd ankitbb
+git clone https://github.com/ankitbotmaker/bbbot.git
+cd bbbot
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Configure bot
-# Edit config.py with your credentials
+# Configure environment variables
+cp .env.example .env
+# Edit .env with your credentials
 ```
 
 ### 3. Configuration
 
-Edit `config.py` with your credentials:
+Create a `.env` file with your credentials:
 
-```python
+```env
 # Bot Configuration
-BOT_TOKEN = "your_bot_token_here"
-MONGO_URL = "your_mongodb_url_here"
-ADMIN_IDS = "your_admin_id_here"
-OWNER_ID = "your_owner_id_here"
-API_ID = "your_api_id_here"
-API_HASH = "your_api_hash_here"
+BOT_TOKEN=your_bot_token_here
+MONGO_URL=your_mongodb_url_here
+ADMIN_IDS=your_admin_id_here
+OWNER_ID=your_owner_id_here
+
+# Optional
+API_ID=your_api_id_here
+API_HASH=your_api_hash_here
 ```
 
 ### 4. Run the Bot
@@ -78,12 +103,16 @@ python bot.py
 - `/start` - Start the bot and access main menu
 - `/id` - Get your user ID or channel ID
 - `/stats` - View your broadcast statistics
-- `/premium` - View premium plans and features
+- `/premium` - View all available features (now free!)
+- `/add` - Add channels to your list
+- `/channels` - View your channel list
+- `/broadcast` - Start broadcasting interface
+- `/stop` - Stop active broadcasts
 - `/cleanup` - Access auto cleanup system
 - `/clear` - Same as cleanup command
 
 ### 👨‍💼 Admin Commands
-- `/analytics` - View admin analytics dashboard
+- `/admin` - Access admin panel
 - All user commands plus admin panel access
 
 ## 🎮 How to Use
@@ -91,73 +120,65 @@ python bot.py
 ### 📢 Broadcasting Messages
 
 1. **Start Bot**: Send `/start` command
-2. **Add Channels**: Click "➕ Add Channel" button
-3. **Send Message**: Click "📢 Broadcast" button
-4. **Choose Options**: Select auto repost/delete settings
-5. **Confirm**: Review and start broadcasting
+2. **Add Channels**: Click "➕ Add Channel" button or send links
+3. **Send Message**: Send your message with optional links
+4. **Auto-Detection**: Bot automatically detects and adds channels from links
+5. **Configure**: Set auto-repost/delete settings
+6. **Broadcast**: Start broadcasting to all channels
+
+### 🔗 Auto Link Detection
+
+The bot automatically detects and adds channels from:
+- `https://t.me/channelname`
+- `@channelname`
+- `t.me/channelname`
+- `https://telegram.me/channelname`
 
 ### 🛑 Emergency Stop
 
-1. **Instant Stop**: Click "🛑 Instant Stop All" button
+1. **Instant Stop**: Click "🛑 Stop All" button
 2. **Stop & Delete**: Click "🗑 Stop & Delete" for confirmation
 3. **Auto Cleanup**: Use `/cleanup` for complete system cleanup
 
-### 📋 Bulk Channel Management
+## 🎉 Free Features for Everyone!
 
-1. **Bulk Add**: Click "📋 Bulk Add Channels"
-2. **Format Options**:
-   ```
-   -1002334441744
-   -1002070181214
-   -1002203225057
-   ```
-   Or:
-   ```
-   -1002334441744, -1002070181214, -1002203225057
-   ```
-3. **Process**: Bot will add all channels with progress updates
-
-## 💎 Premium System
-
-### 🔑 Premium Activation
-- **Owner Only**: Only bot owner can activate premium
-- **Contact Owner**: Users must contact owner directly
-- **No Self-Activation**: Premium cannot be self-activated
-
-### 📦 Premium Plans
-- **1 Month**: ₹299
-- **3 Months**: ₹799
-- **6 Months**: ₹1499
-- **1 Year**: ₹2499
-
-### ⚡ Premium Benefits
-- **200+ Channels**: Double the channel limit
-- **Advanced Analytics**: Detailed statistics
-- **Priority Support**: Faster response times
+### 🚀 All Features Included
+- **Unlimited Channels**: No channel limits
+- **Advanced Analytics**: Detailed statistics for all users
+- **Priority Support**: Fast response times
 - **Scheduled Broadcasts**: Future posting
 - **Custom Auto Delete**: Any time interval
 - **Bulk Operations**: Mass channel management
+- **Auto Link Detection**: Automatic channel addition
+- **Message Templates**: Pre-built formats
+- **Real-time Monitoring**: Live progress tracking
 
-## 🛠 Technical Details
+### 💡 No Premium Required!
+All features are completely free with no hidden costs or limitations!
+
+## 🛠️ Technical Details
 
 ### 📊 Database Schema
-- **Users Collection**: User data and premium status
+- **Users Collection**: User data and analytics
 - **Channels Collection**: Channel information and settings
 - **Broadcasts Collection**: Broadcast history and analytics
 - **Analytics Collection**: System performance metrics
+- **Scheduled Broadcasts**: Future broadcast scheduling
+- **Message Tracking**: Auto operations tracking
 
 ### ⚡ Performance Features
-- **Threaded Operations**: Background processing
-- **Error Handling**: Robust error recovery
+- **Threaded Operations**: Background processing with ThreadPoolExecutor
+- **Error Handling**: Robust error recovery and logging
 - **Rate Limiting**: Telegram API compliance
 - **Progress Tracking**: Real-time updates
 - **Memory Optimization**: Efficient resource usage
+- **Connection Pooling**: MongoDB connection optimization
 
 ### 🔒 Security Features
-- **Owner Verification**: Secure premium activation
 - **Admin Controls**: Protected admin functions
-- **User Authorization**: Premium-only access
+- **User Authorization**: Secure access control
 - **API Rate Limiting**: Prevents abuse
+- **Input Validation**: Comprehensive data validation
 - **Error Logging**: Comprehensive monitoring
 
 ## 🚀 Deployment
@@ -179,6 +200,7 @@ python bot.py
    heroku config:set BOT_TOKEN="your_bot_token"
    heroku config:set MONGO_URL="your_mongodb_url"
    heroku config:set ADMIN_IDS="your_admin_id"
+   heroku config:set OWNER_ID="your_owner_id"
    ```
 
 3. **Deploy from GitHub**:
@@ -213,17 +235,17 @@ COPY . .
 CMD ["python", "bot.py"]
 ```
 
-### 🖥 VPS Deployment
+### 🖥️ VPS Deployment
 
 ```bash
 # Install dependencies
 sudo apt update
 sudo apt install python3 python3-pip mongodb
+pip3 install -r requirements.txt
 
 # Setup bot
-git clone <repo>
-cd ankitbb
-pip3 install -r requirements.txt
+git clone https://github.com/ankitbotmaker/bbbot.git
+cd bbbot
 
 # Run with systemd
 sudo cp bot.service /etc/systemd/system/
@@ -235,11 +257,17 @@ sudo systemctl start bot
 
 ### ⚙️ Advanced Settings
 ```python
-MAX_CHANNELS_PER_USER = 100  # Channel limit per user
-MAX_BROADCAST_SIZE = 100     # Max broadcasts to track
-BROADCAST_DELAY = 1          # Delay between broadcasts (seconds)
-AUTO_DELETE_OPTIONS = [5, 10, 15, 30, 60, 120, 360, 720, 1440]  # minutes
-AUTO_REPOST_OPTIONS = [5, 10, 15, 30, 60, 120, 360, 720, 1440]  # minutes
+# Channel Limits (All Free)
+MAX_CHANNELS = 1000  # Unlimited for everyone
+
+# Broadcast Settings
+BROADCAST_DELAY = 1  # Delay between broadcasts (seconds)
+MAX_CONCURRENT_BROADCASTS = 5
+BROADCAST_TIMEOUT = 30
+
+# Auto Operations
+AUTO_DELETE_OPTIONS = [5, 10, 15, 30, 60, 120, 360, 720, 1440]
+AUTO_REPOST_OPTIONS = [5, 10, 15, 30, 60, 120, 360, 720, 1440]
 ```
 
 ### 📱 Bot Customization
@@ -267,11 +295,11 @@ AUTO_REPOST_OPTIONS = [5, 10, 15, 30, 60, 120, 360, 720, 1440]  # minutes
 # Review error logs
 ```
 
-**Premium Issues**
+**Feature Issues**
 ```bash
-# Confirm owner activation
-# Check premium expiry
-# Verify user ID
+# All features are now free
+# No premium activation required
+# Contact support for help
 ```
 
 ### 📋 Debug Mode
@@ -295,10 +323,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## 📞 Support
 
-- **Owner Contact**: Contact bot owner for premium activation
 - **Issues**: Create GitHub issue for bugs
 - **Features**: Request features via GitHub discussions
 - **Documentation**: Check wiki for detailed guides
+- **Help**: All features are free - no activation needed!
 
 ## 🎯 Roadmap
 
@@ -311,8 +339,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - **📱 Mobile App**: Dedicated mobile application
 
 ### 🚀 Version History
-- **v2.0**: Owner-only premium system, instant stop, aesthetic improvements
-- **v1.5**: Bulk operations, auto cleanup, advanced analytics
+- **v3.0**: Plugin architecture, enhanced error handling, auto link detection, ALL FEATURES FREE
+- **v2.0**: Instant stop, aesthetic improvements, bulk operations
+- **v1.5**: Auto cleanup, advanced analytics
 - **v1.0**: Basic broadcasting, auto repost/delete, admin panel
 
 ---
