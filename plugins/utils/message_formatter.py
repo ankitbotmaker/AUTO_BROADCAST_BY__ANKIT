@@ -113,20 +113,22 @@ class MessageFormatter:
         return "\n".join(formatted_channels)
     
     def format_analytics_summary(self, analytics: Dict[str, Any]) -> str:
-        """Format analytics data for display"""
+        """Format analytics data for display (HTML with bold and blockquotes)"""
         total_broadcasts = analytics.get('total_broadcasts', 0)
         successful = analytics.get('successful_broadcasts', 0)
         failed = analytics.get('failed_broadcasts', 0)
         success_rate = (successful / total_broadcasts * 100) if total_broadcasts > 0 else 0
         
         return f"""
-📊 **Analytics Summary**
-• **Total Broadcasts:** {total_broadcasts}
-• **Successful:** {successful}
-• **Failed:** {failed}
-• **Success Rate:** {success_rate:.1f}%
-• **Total Channels:** {analytics.get('total_channels', 0)}
-• **Messages Sent:** {analytics.get('total_messages_sent', 0)}
+<b>📊 Analytics Summary</b>
+<blockquote>
+• <b>Total Broadcasts:</b> {total_broadcasts}<br>
+• <b>Successful:</b> {successful}<br>
+• <b>Failed:</b> {failed}<br>
+• <b>Success Rate:</b> {success_rate:.1f}%<br>
+• <b>Total Channels:</b> {analytics.get('total_channels', 0)}<br>
+• <b>Messages Sent:</b> {analytics.get('total_messages_sent', 0)}
+</blockquote>
         """.strip()
     
     def format_premium_plans(self, plans: Dict[str, Dict[str, Any]]) -> str:

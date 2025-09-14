@@ -29,7 +29,7 @@ from dotenv import load_dotenv
 import requests
 
 # Import configuration
-from config import *
+    from config import *
 
 # Import plugins
 from plugins.database import DatabaseConnection, DatabaseOperations
@@ -73,7 +73,7 @@ class AdvancedBroadcastBot:
             else:
                 logger.error("❌ Database initialization failed")
                 raise Exception("Database connection failed")
-        except Exception as e:
+    except Exception as e:
             logger.error(f"❌ Database initialization error: {e}")
             raise
     
@@ -158,7 +158,7 @@ class AdvancedBroadcastBot:
             
             logger.info("✅ All handlers setup successfully")
             
-        except Exception as e:
+                    except Exception as e:
             logger.error(f"❌ Handler setup error: {e}")
             raise
     
@@ -203,10 +203,10 @@ class AdvancedBroadcastBot:
                 user_id,
                 stats_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
-        except Exception as e:
+                    except Exception as e:
             logger.error(f"Error in stats command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error retrieving statistics.")
     
@@ -225,7 +225,7 @@ class AdvancedBroadcastBot:
                 parse_mode="HTML"
             )
             
-        except Exception as e:
+    except Exception as e:
             logger.error(f"Error in premium command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading features information.")
     
@@ -241,9 +241,9 @@ class AdvancedBroadcastBot:
                 user_id,
                 add_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
-            
+                
         except Exception as e:
             logger.error(f"Error in add command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading add channels interface.")
@@ -261,26 +261,27 @@ class AdvancedBroadcastBot:
                 user_id,
                 channels_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
-            
-        except Exception as e:
+                        
+                except Exception as e:
             logger.error(f"Error in channels command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading channels.")
     
     def _handle_broadcast_command(self, message):
         """Handle /broadcast command"""
         try:
-            user_id = message.from_user.id
+    user_id = message.from_user.id
             channels = self.db_ops.get_user_channels(user_id)
             
             if not channels:
                 self.bot.send_message(
                     user_id,
-                    "❌ **No channels found!**\n\nPlease add channels first using /add command."
+                    "❌ <b>No channels found!</b>\n\n<blockquote>Please add channels first using /add command.</blockquote>",
+                    parse_mode="HTML"
                 )
-                return
-            
+        return
+    
             broadcast_text = self._create_broadcast_message()
             markup = self._create_broadcast_keyboard()
             
@@ -288,26 +289,26 @@ class AdvancedBroadcastBot:
                 user_id,
                 broadcast_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
-        except Exception as e:
+            except Exception as e:
             logger.error(f"Error in broadcast command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading broadcast interface.")
     
     def _handle_stop_command(self, message):
         """Handle /stop command"""
-        try:
-            user_id = message.from_user.id
+                try:
+                    user_id = message.from_user.id
             result = self.broadcast_manager.stop_broadcast(user_id)
             
             self.bot.send_message(
                 user_id,
                 result["message"],
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
-        except Exception as e:
+    except Exception as e:
             logger.error(f"Error in stop command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error stopping broadcast.")
     
@@ -323,10 +324,10 @@ class AdvancedBroadcastBot:
                 user_id,
                 cleanup_text,
                 reply_markup=markup,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
-        except Exception as e:
+                    except Exception as e:
             logger.error(f"Error in cleanup command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading cleanup interface.")
     
@@ -337,25 +338,29 @@ class AdvancedBroadcastBot:
             chat_id = message.chat.id
             
             id_text = f"""
-🆔 **ID Information**
+<b>🆔 ID Information</b>
 
-**Your User ID:** `{user_id}`
-**Chat ID:** `{chat_id}`
+<blockquote>
+<b>Your User ID:</b> <code>{user_id}</code>
+<b>Chat ID:</b> <code>{chat_id}</code>
+</blockquote>
 
-**How to get Channel ID:**
-1. Add bot to your channel as admin
-2. Send any message in the channel
-3. Forward that message to this bot
-4. Bot will show the channel ID
+<b>How to get Channel ID:</b>
+<blockquote>
+1) Add bot to your channel as admin<br>
+2) Send any message in the channel<br>
+3) Forward that message to this bot<br>
+4) Bot will show the channel ID
+</blockquote>
             """.strip()
             
             self.bot.send_message(
-                user_id,
+                    user_id, 
                 id_text,
-                parse_mode="Markdown"
+                parse_mode="HTML"
             )
             
-        except Exception as e:
+                        except Exception as e:
             logger.error(f"Error in id command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error retrieving ID information.")
     
@@ -366,14 +371,15 @@ class AdvancedBroadcastBot:
             
             if user_id not in ADMIN_IDS:
                 self.bot.send_message(
-                    user_id,
-                    "❌ **Access Denied!**\n\nYou don't have admin permissions."
+                    user_id, 
+                    "❌ <b>Access Denied!</b>\n\n<blockquote>You don't have admin permissions.</blockquote>",
+                    parse_mode="HTML"
                 )
                 return
             
             admin_text = self._create_admin_message()
             markup = self._create_admin_keyboard()
-            
+
             self.bot.send_message(
                 user_id,
                 admin_text,
@@ -381,7 +387,7 @@ class AdvancedBroadcastBot:
                 parse_mode="HTML"
             )
             
-        except Exception as e:
+                        except Exception as e:
             logger.error(f"Error in admin command: {e}")
             self.bot.send_message(message.chat.id, "❌ Error loading admin panel.")
     
@@ -405,7 +411,7 @@ class AdvancedBroadcastBot:
             else:
                 self.bot.answer_callback_query(call.id, "❌ Unknown action")
                 
-        except Exception as e:
+                    except Exception as e:
             logger.error(f"Error in callback query: {e}")
             self.bot.answer_callback_query(call.id, "❌ An error occurred")
     
@@ -419,7 +425,8 @@ class AdvancedBroadcastBot:
             if not channels:
                 self.bot.send_message(
                     user_id,
-                    "❌ **No channels found!**\n\nPlease add channels first using /add command."
+                    "❌ <b>No channels found!</b>\n\n<blockquote>Please add channels first using /add command.</blockquote>",
+                    parse_mode="HTML"
                 )
                 return
             
@@ -427,7 +434,7 @@ class AdvancedBroadcastBot:
             if message.chat.type == 'private':
                 self._start_broadcast_flow(user_id, message)
             
-        except Exception as e:
+                    except Exception as e:
             logger.error(f"Error in message handler: {e}")
             self.bot.send_message(message.chat.id, "❌ An error occurred processing your message.")
     
@@ -452,8 +459,8 @@ class AdvancedBroadcastBot:
                 reply_markup=markup,
                 parse_mode="HTML"
             )
-            
-        except Exception as e:
+                        
+                    except Exception as e:
             logger.error(f"Error starting broadcast flow: {e}")
             self.bot.send_message(user_id, "❌ Error processing your message for broadcast.")
     
@@ -488,17 +495,17 @@ class AdvancedBroadcastBot:
     
     def _create_main_menu_keyboard(self, user_id: int) -> types.InlineKeyboardMarkup:
         """Create main menu keyboard"""
-        markup = types.InlineKeyboardMarkup(row_width=2)
+            markup = types.InlineKeyboardMarkup(row_width=2)
         
-        markup.add(
+    markup.add(
             types.InlineKeyboardButton("📢 Broadcast", callback_data="broadcast_start"),
             types.InlineKeyboardButton("➕ Add Channels", callback_data="add_channels")
-        )
-        markup.add(
+    )
+    markup.add(
             types.InlineKeyboardButton("📋 My Channels", callback_data="my_channels"),
             types.InlineKeyboardButton("📊 Statistics", callback_data="show_stats")
         )
-        markup.add(
+                            markup.add(
             types.InlineKeyboardButton("🎨 Features", callback_data="features_info"),
             types.InlineKeyboardButton("🛠 Settings", callback_data="settings")
         )
@@ -511,19 +518,21 @@ class AdvancedBroadcastBot:
         message_text = message.text or message.caption or ""
         
         config_text = f"""
-📢 **Broadcast Configuration**
+<b>📢 Broadcast Configuration</b>
 
-<b>📝 Message Type:</b> {message_type.title()}
-<b>📊 Total Channels:</b> {len(all_channels)}
+<blockquote>
+<b>📝 Message Type:</b> {message_type.title()}<br>
+<b>📊 Total Channels:</b> {len(all_channels)}<br>
 <b>➕ Auto-Added:</b> {len(added_channels)}
+</blockquote>
 
-<b>🔍 Message Preview:</b>
-<blockquote>{message_text[:200]}{'...' if len(message_text) > 200 else ''}</blockquote>
+<b>🔍 Message Preview</b>
+<blockquote>{(message_text[:200] + '...') if len(message_text) > 200 else message_text}</blockquote>
         """.strip()
         
         if added_channels:
-            channel_list = "\n".join([f"• {ch['channel_name']} (@{ch['username'] or 'private'})" for ch in added_channels])
-            config_text += f"\n\n<b>✅ Auto-Added Channels:</b>\n{channel_list}"
+            channel_list = "<br>".join([f"• <b>{ch['channel_name']}</b> (@{ch['username'] or 'private'})" for ch in added_channels])
+            config_text += f"\n\n<b>✅ Auto-Added Channels</b>\n<blockquote>{channel_list}</blockquote>"
         
         return config_text
     
@@ -533,7 +542,7 @@ class AdvancedBroadcastBot:
         
         markup.add(
             types.InlineKeyboardButton("🔄 Set Auto Repost", callback_data="set_repost_time"),
-            types.InlineKeyboardButton("🗑 Set Auto Delete", callback_data="set_delete_time")
+            types.InlineKeyboardButton("🗑️ Set Auto Delete", callback_data="set_delete_time")
         )
         markup.add(
             types.InlineKeyboardButton("📤 Send Now", callback_data="send_now"),
