@@ -1,126 +1,109 @@
 #!/usr/bin/env python3
 """
-Broadcast Analytics Plugin
-Handles analytics and performance tracking
+Broadcast Analytics
+Handles analytics collection and reporting
 """
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, List, Optional, Any
 from ..database.operations import DatabaseOperations
 
 logger = logging.getLogger(__name__)
 
 class BroadcastAnalytics:
-    """Enhanced analytics tracking for broadcast operations"""
+    """Handles broadcast analytics and reporting"""
     
     def __init__(self, db_ops: DatabaseOperations):
         self.db_ops = db_ops
+        logger.info("✅ Broadcast Analytics initialized")
     
-    def track_broadcast_start(self, user_id: int, broadcast_id: str, channel_count: int):
-        """Track broadcast start"""
+    def record_broadcast_start(self, user_id: int, broadcast_id: str, 
+                              channel_count: int) -> bool:
+        """Record broadcast start"""
         try:
-            self.db_ops.update_analytics(user_id, "total_broadcasts", 1)
-            logger.info(f"📊 Tracked broadcast start: User {user_id}, Channels {channel_count}")
+            return self.db_ops.update_analytics(
+                user_id, 
+                "broadcasts_started", 
+                1
+            )
         except Exception as e:
-            logger.error(f"Error tracking broadcast start: {e}")
+            logger.error(f"❌ Error recording broadcast start: {e}")
+            return False
     
-    def track_broadcast_completion(self, user_id: int, successful: int, failed: int):
-        """Track broadcast completion"""
+    def record_broadcast_completion(self, user_id: int, broadcast_id: str, 
+                                   successful_sends: int, failed_sends: int) -> bool:
+        """Record broadcast completion"""
         try:
-            if successful > 0:
-                self.db_ops.update_analytics(user_id, "successful_broadcasts", successful)
-            if failed > 0:
-                self.db_ops.update_analytics(user_id, "failed_broadcasts", failed)
+            # Record completion
+            self.db_ops.update_analytics(user_id, "broadcasts_completed", 1)
             
-            total = successful + failed
-            if total > 0:
-                success_rate = (successful / total) * 100
-                logger.info(f"📊 Tracked broadcast completion: Success {successful}, Failed {failed}, Rate {success_rate:.1f}%")
+            # Record message stats
+            self.db_ops.update_analytics(user_id, "messages_sent", successful_sends)
+            self.db_ops.update_analytics(user_id, "messages_failed", failed_sends)
+            
+            return True
         except Exception as e:
-            logger.error(f"Error tracking broadcast completion: {e}")
+            logger.error(f"❌ Error recording broadcast completion: {e}")
+            return False
     
-    def track_message_sent(self, user_id: int, channel_id: int):
-        """Track individual message sent"""
-        try:
-            self.db_ops.update_analytics(user_id, "total_messages_sent", 1)
-        except Exception as e:
-            logger.error(f"Error tracking message sent: {e}")
-    
-    def track_auto_operation(self, user_id: int, operation_type: str):
-        """Track auto operations (repost/delete)"""
-        try:
-            if operation_type == "repost":
-                self.db_ops.update_analytics(user_id, "total_auto_reposts", 1)
-            elif operation_type == "delete":
-                self.db_ops.update_analytics(user_id, "total_auto_deletes", 1)
-        except Exception as e:
-            logger.error(f"Error tracking auto operation: {e}")
-    
-    def get_user_analytics(self, user_id: int, days: int = 30) -> Dict[str, Any]:
+    def get_user_analytics_summary(self, user_id: int, days: int = 30) -> Dict[str, Any]:
         """Get comprehensive user analytics"""
         try:
             analytics = self.db_ops.get_user_analytics(user_id, days)
             
-            # Calculate additional metrics
-            total_broadcasts = analytics.get("total_broadcasts", 0)
-            successful = analytics.get("successful_broadcasts", 0)
-            failed = analytics.get("failed_broadcasts", 0)
+            # Add calculated metrics
+            if analytics:
+                total_messages = analytics.get("total_messages_sent", 0) + analytics.get("messages_failed", 0)
+                success_rate = 0
+                if total_messages > 0:
+                    success_rate = (analytics.get("total_messages_sent", 0) / total_messages) * 100
+                
+                analytics["success_rate"] = round(success_rate, 2)
+                analytics["total_messages"] = total_messages
             
-            success_rate = (successful / total_broadcasts * 100) if total_broadcasts > 0 else 0
-            
-            return {
-                **analytics,
-                "success_rate": round(success_rate, 2),
-                "total_channels": analytics.get("total_channels", 0),
-                "messages_sent": analytics.get("total_messages_sent", 0),
-                "auto_reposts": analytics.get("total_auto_reposts", 0),
-                "auto_deletes": analytics.get("total_auto_deletes", 0)
-            }
+            return analytics
         except Exception as e:
-            logger.error(f"Error getting user analytics: {e}")
+            logger.error(f"❌ Error getting user analytics: {e}")
             return {}
     
     def get_system_analytics(self) -> Dict[str, Any]:
-        """Get system-wide analytics"""
+        """Get system-wide analytics (admin function)"""
         try:
-            # This would aggregate analytics from all users
-            # Implementation depends on specific requirements
+            stats = self.db_ops.get_database_stats()
+            
             return {
-                "total_users": 0,
-                "total_broadcasts": 0,
-                "total_channels": 0,
-                "success_rate": 0.0
+                "total_users": stats.get("users", 0),
+                "total_channels": stats.get("channels", 0),
+                "total_broadcasts": stats.get("broadcasts", 0),
+                "total_analytics_entries": stats.get("analytics", 0),
+                "last_updated": datetime.utcnow().isoformat()
             }
         except Exception as e:
-            logger.error(f"Error getting system analytics: {e}")
+            logger.error(f"❌ Error getting system analytics: {e}")
             return {}
     
-    def generate_analytics_report(self, user_id: int, days: int = 30) -> str:
-        """Generate formatted analytics report"""
+    def get_top_users(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Get top users by activity"""
         try:
-            analytics = self.get_user_analytics(user_id, days)
-            
-            report = f"""
-📊 **Analytics Report ({days} days)**
-
-**📈 Broadcast Statistics:**
-• Total Broadcasts: {analytics.get('total_broadcasts', 0)}
-• Successful: {analytics.get('successful_broadcasts', 0)}
-• Failed: {analytics.get('failed_broadcasts', 0)}
-• Success Rate: {analytics.get('success_rate', 0):.1f}%
-
-**📢 Channel Statistics:**
-• Total Channels: {analytics.get('total_channels', 0)}
-• Messages Sent: {analytics.get('messages_sent', 0)}
-
-**⚡ Auto Operations:**
-• Auto Reposts: {analytics.get('auto_reposts', 0)}
-• Auto Deletes: {analytics.get('auto_deletes', 0)}
-            """.strip()
-            
-            return report
-            
+            # This would need a more complex query
+            # For now, return empty list
+            return []
         except Exception as e:
-            logger.error(f"Error generating analytics report: {e}")
-            return "❌ Error generating analytics report"
+            logger.error(f"❌ Error getting top users: {e}")
+            return []
+    
+    def export_analytics(self, user_id: int, format: str = "json") -> Optional[str]:
+        """Export user analytics"""
+        try:
+            analytics = self.get_user_analytics_summary(user_id)
+            
+            if format == "json":
+                import json
+                return json.dumps(analytics, indent=2, default=str)
+            
+            # Could add CSV, Excel formats here
+            return None
+        except Exception as e:
+            logger.error(f"❌ Error exporting analytics: {e}")
+            return None

@@ -31,6 +31,7 @@ class Helpers:
                 return f"{prefix}_{timestamp}_{random_chars}"
             else:
                 return f"{timestamp}_{random_chars}"
+        
         except Exception as e:
             logger.error(f"❌ Error generating unique ID: {e}")
             return f"id_{int(time.time())}"
@@ -46,6 +47,7 @@ class Helpers:
                 return hashlib.sha1(text.encode()).hexdigest()
             else:
                 return hashlib.md5(text.encode()).hexdigest()
+        
         except Exception as e:
             logger.error(f"❌ Error generating hash: {e}")
             return ""
@@ -58,10 +60,11 @@ class Helpers:
                 dt = datetime.fromtimestamp(timestamp)
             elif isinstance(timestamp, datetime):
                 dt = timestamp
-            else:
+        else:
                 return str(timestamp)
             
             return dt.strftime(format_str)
+        
         except Exception as e:
             logger.error(f"❌ Error formatting timestamp: {e}")
             return str(timestamp)
@@ -94,7 +97,8 @@ class Helpers:
                     total_minutes += value
             
             return total_minutes if total_minutes > 0 else None
-        except Exception as e:
+            
+            except Exception as e:
             logger.error(f"❌ Error parsing time string: {e}")
             return None
     
@@ -117,7 +121,8 @@ class Helpers:
                     return f"{days}d"
                 else:
                     return f"{days}d {hours}h"
-        except Exception as e:
+                    
+                except Exception as e:
             logger.error(f"❌ Error formatting duration: {e}")
             return f"{minutes}m"
     
@@ -138,6 +143,7 @@ class Helpers:
             eta_time = datetime.utcnow() + timedelta(seconds=eta_seconds)
             
             return eta_time.strftime("%H:%M:%S")
+        
         except Exception as e:
             logger.error(f"❌ Error calculating ETA: {e}")
             return "Unknown"
@@ -156,6 +162,7 @@ class Helpers:
                 i += 1
             
             return f"{size_bytes:.1f} {size_names[i]}"
+        
         except Exception as e:
             logger.error(f"❌ Error formatting file size: {e}")
             return "Unknown"
@@ -198,6 +205,7 @@ class Helpers:
                 return result
             else:
                 return list(dict.fromkeys(lst))  # Preserves order
+        
         except Exception as e:
             logger.error(f"❌ Error deduplicating list: {e}")
             return lst
@@ -215,6 +223,7 @@ class Helpers:
                     
                     logger.warning(f"⚠️ Attempt {attempt + 1} failed: {e}")
                     time.sleep(delay * (2 ** attempt))  # Exponential backoff
+            
         except Exception as e:
             logger.error(f"❌ All retry attempts failed: {e}")
             raise e
@@ -236,6 +245,7 @@ class Helpers:
                 safe_name = name[:max_name_length] + ('.' + ext if ext else '')
             
             return safe_name or "file"
+        
         except Exception as e:
             logger.error(f"❌ Error creating safe filename: {e}")
             return "file"

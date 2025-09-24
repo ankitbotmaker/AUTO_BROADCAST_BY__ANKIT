@@ -69,7 +69,7 @@ class DatabaseConnection:
     
     def get_collection(self, collection_name):
         """Get collection with connection check"""
-        if not self.connected or not self.db:
+        if not self.connected or self.db is None:
             if not self.connect():
                 return None
         return self.db[collection_name]

@@ -1,190 +1,249 @@
 #!/usr/bin/env python3
 """
-Link Handler Utility
-Handles Telegram link detection, resolution, and channel extraction
+Link Handler
+Handles Telegram link detection and channel resolution
 """
 
-import re
 import logging
-from typing import List, Optional, Dict, Any
-from telebot import TeleBot
+import re
+from typing import Dict, List, Optional, Any
+from ..database.operations import DatabaseOperations
 
 logger = logging.getLogger(__name__)
 
 class LinkHandler:
-    """Enhanced link detection and resolution handler"""
+    """Enhanced link handler with automatic channel detection and resolution"""
     
-    def __init__(self, bot: TeleBot):
+    def __init__(self, bot):
         self.bot = bot
+        
+        # Telegram link patterns
         self.link_patterns = [
-            r'(https?://t\.me/[a-zA-Z0-9_]+)',
-            r'(@[a-zA-Z0-9_]+)',
-            r'(t\.me/[a-zA-Z0-9_]+)',
-            r'(https?://telegram\.me/[a-zA-Z0-9_]+)'
+            re.compile(r'https?://t\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
+            re.compile(r'https?://telegram\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
+            re.compile(r't\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
+            re.compile(r'telegram\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
+            re.compile(r'@([a-zA-Z0-9_]+)', re.IGNORECASE)
         ]
+        
+        logger.info("✅ Link Handler initialized")
     
     def extract_telegram_links(self, text: str) -> List[str]:
-        """Extract all Telegram links from text"""
-        if not text or not isinstance(text, str):
-            return []
-        
-        links = []
-        for pattern in self.link_patterns:
-            matches = re.findall(pattern, text)
-            for match in matches:
-                if match not in links:
-                    links.append(match)
-        
-        logger.info(f"Extracted {len(links)} links from text: {links}")
-        return links
-    
-    def resolve_telegram_link(self, link: str) -> Optional[int]:
-        """Resolve Telegram link to channel ID"""
+        """Extract Telegram channel/group links from text"""
         try:
-            # Clean the link first
-            link = link.strip()
+            if not text:
+                return []
+        
+            links = set()
             
-            # Try to get chat info directly
-            if link.startswith('@'):
-                chat_info = self.bot.get_chat(link)
-                return chat_info.id
-                
-            elif link.startswith('https://t.me/') or link.startswith('t.me/'):
-                # Extract username preserving underscores
-                username = link.split('/')[-1]
-                # Remove any query parameters
-                username = username.split('?')[0]
-                # Ensure username is properly formatted
-                if not username.startswith('@'):
-                    username = f"@{username}"
-                chat_info = self.bot.get_chat(username)
-                return chat_info.id
-                
-            elif link.startswith('https://telegram.me/'):
-                # Extract username preserving underscores
-                username = link.split('/')[-1]
-                # Remove any query parameters
-                username = username.split('?')[0]
-                # Ensure username is properly formatted
-                if not username.startswith('@'):
-                    username = f"@{username}"
-                chat_info = self.bot.get_chat(username)
-                return chat_info.id
-                
-            else:
-                # Try as username (add @ if not present)
-                if not link.startswith('@'):
-                    link = f"@{link}"
-                chat_info = self.bot.get_chat(link)
-                return chat_info.id
+            for pattern in self.link_patterns:
+                matches = pattern.findall(text)
+                for match in matches:
+                    # Clean up the username
+                    username = match.strip().lower()
+                    if username and not username.startswith('_'):  # Skip invalid usernames
+                        links.add(username)
+            
+            return list(links)
+        
+        except Exception as e:
+            logger.error(f"❌ Error extracting links: {e}")
+            return []
+    
+    def resolve_channel_info(self, username: str) -> Optional[Dict[str, Any]]:
+        """Resolve channel information from username"""
+        try:
+            # Add @ if not present
+            if not username.startswith('@'):
+                username = f"@{username}"
+            
+            # Get chat info
+            chat = self.bot.get_chat(username)
+            
+            return {
+                "channel_id": chat.id,
+                "channel_name": chat.title or chat.first_name or username,
+                "username": chat.username,
+                "type": chat.type,
+                "member_count": getattr(chat, 'member_count', None),
+                "description": getattr(chat, 'description', None)
+            }
                 
         except Exception as e:
-            logger.error(f"Error resolving link {link}: {e}")
+            logger.warning(f"⚠️ Could not resolve channel {username}: {e}")
             return None
     
-    def auto_add_telegram_links(self, user_id: int, text: str, db_ops) -> List[Dict[str, Any]]:
-        """Automatically add Telegram links as channels"""
-        added_channels = []
-        links = self.extract_telegram_links(text)
-        
-        logger.info(f"Found {len(links)} links in text: {links}")
-        
-        for link in links:
-            try:
-                logger.info(f"Processing link: {link}")
-                channel_id = self.resolve_telegram_link(link)
-                
-                if channel_id:
-                    logger.info(f"Resolved link {link} to channel ID: {channel_id}")
-                    
-                    # Check if channel already exists
-                    existing = db_ops.get_channel(channel_id, user_id)
-                    
-                    if not existing:
-                        # Get channel info
-                        chat_info = self.bot.get_chat(channel_id)
-                        channel_name = chat_info.title or chat_info.username or f"Channel {channel_id}"
-                        
-                        # Add channel to database
-                        success = db_ops.add_channel(
-                            channel_id=channel_id,
-                            user_id=user_id,
-                            channel_name=channel_name,
-                            username=chat_info.username
-                        )
-                        
-                        if success:
-                            added_channels.append({
-                                "channel_id": channel_id,
-                                "channel_name": channel_name,
-                                "username": chat_info.username
-                            })
-                            logger.info(f"Successfully added channel {channel_name} ({channel_id}) for user {user_id}")
-                        else:
-                            logger.error(f"Failed to add channel {channel_id} to database")
-                    else:
-                        logger.info(f"Channel {channel_id} already exists for user {user_id}")
-                else:
-                    logger.warning(f"Could not resolve link {link} to channel ID")
-                    
-            except Exception as e:
-                logger.error(f"Error auto-adding channel {link}: {e}")
-        
-        logger.info(f"Auto-added {len(added_channels)} channels for user {user_id}")
-        return added_channels
-    
-    def validate_channel_access(self, channel_id: int) -> bool:
-        """Validate if bot has access to channel"""
+    def auto_add_telegram_links(self, user_id: int, text: str, 
+                               db_ops: DatabaseOperations) -> List[Dict[str, Any]]:
+        """Automatically detect and add Telegram channels from text"""
         try:
-            chat_info = self.bot.get_chat(channel_id)
-            # Check if bot is admin or has send message permission
-            bot_member = self.bot.get_chat_member(channel_id, self.bot.get_me().id)
-            return bot_member.status in ['administrator', 'creator']
+            if not text:
+                return []
+            
+            # Extract links
+            usernames = self.extract_telegram_links(text)
+            if not usernames:
+                return []
+            
+            added_channels = []
+            
+            for username in usernames:
+                try:
+                    # Resolve channel info
+                    channel_info = self.resolve_channel_info(username)
+                    
+                    if channel_info:
+                        # Check if bot has access
+                        if self.check_bot_access(channel_info["channel_id"]):
+                            # Add to database
+                            success = db_ops.add_channel(
+                                channel_id=channel_info["channel_id"],
+                                user_id=user_id,
+                                channel_name=channel_info["channel_name"],
+                                username=channel_info["username"]
+                            )
+                            
+                            if success:
+                                added_channels.append(channel_info)
+                                logger.info(f"✅ Auto-added channel: {channel_info['channel_name']}")
+                            else:
+                                logger.warning(f"⚠️ Failed to add channel to database: {username}")
+                        else:
+                            logger.warning(f"⚠️ Bot doesn't have access to channel: {username}")
+                    else:
+                        logger.warning(f"⚠️ Could not resolve channel: {username}")
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error processing channel {username}: {e}")
+                    continue
+            
+            return added_channels
+            
         except Exception as e:
-            logger.error(f"Error validating channel access for {channel_id}: {e}")
+            logger.error(f"❌ Error auto-adding links: {e}")
+            return []
+    
+    def check_bot_access(self, channel_id: int) -> bool:
+        """Check if bot has access to a channel"""
+        try:
+            # Try to get chat member (bot itself)
+            bot_info = self.bot.get_me()
+            member = self.bot.get_chat_member(channel_id, bot_info.id)
+            
+            # Check if bot is admin or member
+            return member.status in ['administrator', 'member']
+        
+        except Exception as e:
+            logger.warning(f"⚠️ Cannot access channel {channel_id}: {e}")
             return False
     
-    def get_channel_info(self, channel_id: int) -> Optional[Dict[str, Any]]:
-        """Get detailed channel information"""
+    def validate_telegram_link(self, link: str) -> Dict[str, Any]:
+        """Validate a Telegram link and return info"""
         try:
-            chat_info = self.bot.get_chat(channel_id)
-            return {
-                "id": chat_info.id,
-                "title": chat_info.title,
-                "username": chat_info.username,
-                "type": chat_info.type,
-                "description": getattr(chat_info, 'description', None),
-                "member_count": getattr(chat_info, 'member_count', None)
-            }
+            usernames = self.extract_telegram_links(link)
+            
+            if not usernames:
+                return {
+                    "valid": False,
+                    "error": "No valid Telegram username found in the link"
+                }
+            
+            username = usernames[0]  # Take the first one
+            channel_info = self.resolve_channel_info(username)
+            
+            if channel_info:
+                has_access = self.check_bot_access(channel_info["channel_id"])
+                
+                return {
+                    "valid": True,
+                    "channel_info": channel_info,
+                    "bot_has_access": has_access,
+                    "access_note": "✅ Bot has access" if has_access else "❌ Bot needs to be added as admin"
+                }
+            else:
+                return {
+                    "valid": False,
+                    "error": "Channel not found or is private"
+                }
+        
         except Exception as e:
-            logger.error(f"Error getting channel info for {channel_id}: {e}")
+            logger.error(f"❌ Error validating link: {e}")
+            return {
+                "valid": False,
+                "error": f"Error validating link: {str(e)}"
+            }
+    
+    def get_channel_invite_link(self, channel_id: int) -> Optional[str]:
+        """Get invite link for a channel"""
+        try:
+            # This would require admin rights
+            invite_link = self.bot.export_chat_invite_link(channel_id)
+            return invite_link
+        except Exception as e:
+            logger.warning(f"⚠️ Could not get invite link for {channel_id}: {e}")
             return None
     
-    def is_valid_telegram_link(self, text: str) -> bool:
-        """Check if text contains valid Telegram links"""
-        links = self.extract_telegram_links(text)
-        return len(links) > 0
+    def format_channel_info(self, channel_info: Dict[str, Any]) -> str:
+        """Format channel info for display"""
+        try:
+            name = channel_info.get("channel_name", "Unknown")
+            username = channel_info.get("username", "")
+            channel_type = channel_info.get("type", "channel")
+            member_count = channel_info.get("member_count")
+            
+            formatted = f"<b>{name}</b>"
+            
+            if username:
+                formatted += f" (@{username})"
+            
+            formatted += f"\n<b>Type:</b> {channel_type.title()}"
+            
+            if member_count:
+                formatted += f"\n<b>Members:</b> {member_count:,}"
+            
+            return formatted
+        
+        except Exception as e:
+            logger.error(f"❌ Error formatting channel info: {e}")
+            return "Error formatting channel information"
     
-    def clean_links_from_text(self, text: str) -> str:
-        """Remove Telegram links from text while preserving other content"""
-        if not text:
-            return text
+    def bulk_validate_channels(self, channel_list: List[str]) -> Dict[str, Any]:
+        """Validate multiple channels at once"""
+        try:
+            results = {
+                "valid_channels": [],
+                "invalid_channels": [],
+                "total_processed": 0,
+                "success_rate": 0
+            }
+            
+            for channel_link in channel_list:
+                result = self.validate_telegram_link(channel_link.strip())
+                results["total_processed"] += 1
+                
+                if result["valid"]:
+                    results["valid_channels"].append({
+                        "link": channel_link,
+                        "info": result["channel_info"],
+                        "has_access": result["bot_has_access"]
+                    })
+                else:
+                    results["invalid_channels"].append({
+                        "link": channel_link,
+                        "error": result["error"]
+                    })
+            
+            if results["total_processed"] > 0:
+                results["success_rate"] = (len(results["valid_channels"]) / results["total_processed"]) * 100
+            
+            return results
         
-        cleaned_text = text
-        for pattern in self.link_patterns:
-            cleaned_text = re.sub(pattern, '', cleaned_text)
-        
-        # Clean up extra whitespace
-        cleaned_text = re.sub(r'\s+', ' ', cleaned_text).strip()
-        return cleaned_text
-    
-    def format_links_display(self, links: List[str]) -> str:
-        """Format links for display in messages"""
-        if not links:
-            return ""
-        
-        formatted_links = []
-        for i, link in enumerate(links, 1):
-            formatted_links.append(f"{i}. `{link}`")
-        
-        return "\n".join(formatted_links)
+        except Exception as e:
+            logger.error(f"❌ Error bulk validating channels: {e}")
+            return {
+                "valid_channels": [],
+                "invalid_channels": [],
+                "total_processed": 0,
+                "success_rate": 0,
+                "error": str(e)
+            }

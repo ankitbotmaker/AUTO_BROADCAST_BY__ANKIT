@@ -1,0 +1,44 @@
+# ADVANCED TELEGRAM BROADCAST BOT - CONFIGURATION SETUP
+# =====================================================
+
+✅ Your bot token is VALID!
+Bot Username: @ANKITBBBOT
+Bot Token: 8363735141:AAHkMl_ziYqCmaww40xgFSK_WlfnHa8ONFY
+
+# STEP 1: Create .env file
+# Copy the content below and save it as ".env" (without quotes) in the bot directory
+
+BOT_TOKEN=8363735141:AAHkMl_ziYqCmaww40xgFSK_WlfnHa8ONFY
+MONGO_URL=mongodb://localhost:27017/
+ADMIN_IDS=YOUR_USER_ID_HERE
+OWNER_ID=YOUR_USER_ID_HERE
+DATABASE_NAME=telegram_broadcast_bot
+LOG_LEVEL=INFO
+DEBUG=False
+
+# STEP 2: Get your Telegram User ID
+# - Start your bot (@ANKITBBBOT) on Telegram
+# - Send /id command to get your user ID
+# - Replace YOUR_USER_ID_HERE with your actual user ID
+
+# STEP 3: Set up MongoDB Database
+# Option A: Local MongoDB (if you have MongoDB installed)
+#   MONGO_URL=mongodb://localhost:27017/
+#
+# Option B: MongoDB Atlas (Free cloud database - RECOMMENDED)
+#   1. Go to https://www.mongodb.com/atlas
+#   2. Create free account and cluster
+#   3. Get connection string
+#   4. Replace the MONGO_URL with your Atlas connection string
+#      Example: mongodb+srv://username:password@cluster.mongodb.net/database
+
+# STEP 4: Start the bot
+# Run: python bot.py
+
+# STEP 5: Test the bot
+# 1. Go to Telegram and find @ANKITBBBOT
+# 2. Send /start command
+# 3. Follow the instructions to add channels and start broadcasting
+
+# ALL FEATURES ARE FREE! 🎉
+# No premium activation required - everything is unlocked by default!
