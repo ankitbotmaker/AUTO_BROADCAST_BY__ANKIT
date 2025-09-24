@@ -20,18 +20,18 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in environment variables!")
 
 # Admin Configuration
-ADMIN_IDS = os.getenv("ADMIN_IDS", "").split(",") if os.getenv("ADMIN_IDS") else []
+ADMIN_IDS = os.getenv("ADMIN_IDS", "22746239,7792539085").split(",") if os.getenv("ADMIN_IDS") else ["22746239", "7792539085"]
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS if admin_id.strip().isdigit()]
 
 # Owner Configuration (for premium activation)
-OWNER_ID = int(os.getenv("OWNER_ID", "0"))
+OWNER_ID = int(os.getenv("OWNER_ID", "7792539085"))
 
 # =============================================================================
 # DATABASE CONFIGURATION
 # =============================================================================
 
 # MongoDB Configuration
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017/")
+MONGO_URL = os.getenv("MONGO_URL", "mongodb+srv://herukobanna:ankit999@cluster0.xs772me.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "telegram_broadcast_bot")
 
 # Collection Names
@@ -49,7 +49,7 @@ BOT_MESSAGES_COLLECTION = "bot_messages"
 
 # Telegram API (Optional - for advanced features)
 API_ID = os.getenv("API_ID")
-API_HASH = os.getenv("API_HASH")
+API_HASH = os.getenv("API_HASH", "a98ec8cfd8572a3a7c936cf828fe6215")
 
 # =============================================================================
 # BROADCAST CONFIGURATION
@@ -182,9 +182,8 @@ def validate_config():
     if not ADMIN_IDS:
         errors.append("At least one ADMIN_ID is required")
     
-    # OWNER_ID is optional now - all features are free
-    # if OWNER_ID == 0:
-    #     errors.append("OWNER_ID is required for premium system")
+    if OWNER_ID == 0:
+        errors.append("OWNER_ID is required for premium system")
     
     if errors:
         raise ValueError(f"Configuration errors: {', '.join(errors)}")
