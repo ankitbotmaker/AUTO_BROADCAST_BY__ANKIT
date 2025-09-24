@@ -182,8 +182,9 @@ def validate_config():
     if not ADMIN_IDS:
         errors.append("At least one ADMIN_ID is required")
     
-    if OWNER_ID == 0:
-        errors.append("OWNER_ID is required for premium system")
+    # OWNER_ID is optional now - all features are free
+    # if OWNER_ID == 0:
+    #     errors.append("OWNER_ID is required for premium system")
     
     if errors:
         raise ValueError(f"Configuration errors: {', '.join(errors)}")
