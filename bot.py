@@ -58,6 +58,7 @@ class AdvancedBroadcastBot:
         self.scheduled_tasks = {}
         self.user_messages = {}  # Store user messages temporarily for broadcasting
         self.user_preferences = {}  # Store user preferences temporarily
+        self.broadcast_message_ids = {}  # Store broadcast message IDs for cleanup
         
         # Initialize components
         self._initialize_database()
@@ -576,16 +577,16 @@ Bot will automatically add if you're admin!
             # Store the message for broadcasting
             self.user_messages[user_id] = message
             
-            # Auto-detect and add channels from links
-            added_channels = self.link_handler.auto_add_telegram_links(
-                user_id, message.text or message.caption or "", self.db_ops
-            )
+            # Set broadcast state to collecting content
+            if user_id not in self.broadcast_states:
+                self.broadcast_states[user_id] = {}
+            self.broadcast_states[user_id]["status"] = "collecting_content"
             
-            # Get all user channels
+            # Get all user channels (don't auto-add from links)
             all_channels = self.db_ops.get_user_channels(user_id)
             
             # Create broadcast configuration UI
-            broadcast_text = self._create_broadcast_config_message(message, added_channels, all_channels, user_id)
+            broadcast_text = self._create_broadcast_config_message(message, [], all_channels, user_id)
             markup = self._create_broadcast_config_keyboard()
             
             self.bot.send_message(
@@ -928,7 +929,7 @@ No premium required - everything unlocked!
         if user_id in ADMIN_IDS:
             markup.add(
                 types.InlineKeyboardButton("👨‍💼 Admin Panel", callback_data="admin_panel")
-        )
+            )
         
         return markup
     
@@ -1439,6 +1440,11 @@ Add channels directly using their unique ID.
                         call.message.message_id
                     )
                     return
+                
+                # Set broadcast state to collecting content
+                if user_id not in self.broadcast_states:
+                    self.broadcast_states[user_id] = {}
+                self.broadcast_states[user_id]["status"] = "collecting_content"
                 
                 broadcast_text = self._create_broadcast_message()
                 markup = self._create_broadcast_keyboard()
@@ -2210,65 +2216,76 @@ An error occurred during broadcasting.
                 pass
     
     def _send_message_to_channel(self, message, channel_id: int):
-        """Send a specific message to a channel"""
+        """Send a specific message to a channel and track message ID"""
         try:
+            sent_message = None
+            
             if message.content_type == 'text':
-                self.bot.send_message(
+                sent_message = self.bot.send_message(
                     channel_id,
                     message.text,
                     parse_mode="HTML" if message.entities else None
                 )
             elif message.content_type == 'photo':
-                self.bot.send_photo(
+                sent_message = self.bot.send_photo(
                     channel_id,
                     message.photo[-1].file_id,
                     caption=message.caption,
                     parse_mode="HTML" if message.caption_entities else None
                 )
             elif message.content_type == 'video':
-                self.bot.send_video(
+                sent_message = self.bot.send_video(
                     channel_id,
                     message.video.file_id,
                     caption=message.caption,
                     parse_mode="HTML" if message.caption_entities else None
                 )
             elif message.content_type == 'document':
-                self.bot.send_document(
+                sent_message = self.bot.send_document(
                     channel_id,
                     message.document.file_id,
                     caption=message.caption,
                     parse_mode="HTML" if message.caption_entities else None
                 )
             elif message.content_type == 'audio':
-                self.bot.send_audio(
+                sent_message = self.bot.send_audio(
                     channel_id,
                     message.audio.file_id,
                     caption=message.caption,
                     parse_mode="HTML" if message.caption_entities else None
                 )
             elif message.content_type == 'voice':
-                self.bot.send_voice(
+                sent_message = self.bot.send_voice(
                     channel_id,
                     message.voice.file_id,
                     caption=message.caption,
                     parse_mode="HTML" if message.caption_entities else None
                 )
             elif message.content_type == 'video_note':
-                self.bot.send_video_note(
+                sent_message = self.bot.send_video_note(
                     channel_id,
                     message.video_note.file_id
                 )
             elif message.content_type == 'sticker':
-                self.bot.send_sticker(
+                sent_message = self.bot.send_sticker(
                     channel_id,
                     message.sticker.file_id
                 )
             else:
                 # Fallback for other message types
-                self.bot.send_message(
+                sent_message = self.bot.send_message(
                     channel_id,
                     f"📎 Unsupported message type: {message.content_type}"
                 )
+            
+            # Track the sent message ID for cleanup
+            if sent_message:
+                if channel_id not in self.broadcast_message_ids:
+                    self.broadcast_message_ids[channel_id] = []
+                self.broadcast_message_ids[channel_id].append(sent_message.message_id)
+                logger.info(f"📝 Tracked message ID {sent_message.message_id} for channel {channel_id}")
+            
+            return sent_message
                 
         except Exception as e:
             logger.error(f"Error sending message to channel {channel_id}: {e}")
@@ -2504,7 +2521,7 @@ An error occurred during broadcasting.
             if not channels:
                 return 0
             
-            # Step 3: Delete all messages from all channels
+            # Step 3: Delete tracked broadcast messages from all channels
             deleted_count = 0
             for channel in channels:
                 channel_id = channel.get('channel_id')
@@ -2512,18 +2529,52 @@ An error occurred during broadcasting.
                     continue
                 
                 try:
-                    # Get recent messages from this channel
-                    messages_deleted = self._delete_channel_messages(channel_id)
+                    # Delete tracked broadcast messages for this channel
+                    messages_deleted = self._delete_tracked_messages(channel_id)
                     deleted_count += messages_deleted
                     
                 except Exception as e:
                     logger.error(f"❌ Error deleting messages from channel {channel_id}: {e}")
             
-            logger.info(f"🧹 Cleaned up {deleted_count} messages for user {user_id}")
+            # Step 4: Clear tracked message IDs
+            self.broadcast_message_ids = {}
+            
+            logger.info(f"🧹 Cleaned up {deleted_count} broadcast messages for user {user_id}")
             return deleted_count
             
         except Exception as e:
             logger.error(f"❌ Error in stop broadcast and cleanup: {e}")
+            return 0
+    
+    def _delete_tracked_messages(self, channel_id):
+        """Delete tracked broadcast messages from a channel"""
+        try:
+            deleted_count = 0
+            
+            # Get tracked message IDs for this channel
+            if channel_id in self.broadcast_message_ids:
+                message_ids = self.broadcast_message_ids[channel_id]
+                logger.info(f"🗑️ Deleting {len(message_ids)} tracked messages from channel {channel_id}")
+                
+                for message_id in message_ids:
+                    try:
+                        self.bot.delete_message(channel_id, message_id)
+                        deleted_count += 1
+                        time.sleep(0.1)  # Small delay to avoid rate limits
+                        logger.info(f"✅ Deleted message {message_id} from channel {channel_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not delete message {message_id} from channel {channel_id}: {e}")
+                        continue
+                
+                # Clear tracked messages for this channel
+                del self.broadcast_message_ids[channel_id]
+            else:
+                logger.info(f"ℹ️ No tracked messages found for channel {channel_id}")
+            
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting tracked messages from channel {channel_id}: {e}")
             return 0
     
     def _delete_channel_messages(self, channel_id):
@@ -2531,22 +2582,43 @@ An error occurred during broadcasting.
         try:
             deleted_count = 0
             
-            # Get recent messages (last 50 messages)
+            # Since we can't get chat history directly, we'll use a different approach
+            # We'll try to delete messages by sending a message and then deleting it
+            # This ensures we have a recent message ID to work with
+            
             try:
-                # Try to get recent messages using get_chat_history
-                messages = self.bot.get_chat_history(channel_id, limit=50)
+                # Send a temporary message to get a recent message ID
+                temp_message = self.bot.send_message(
+                    channel_id, 
+                    "🧹 Cleaning up messages...",
+                    disable_notification=True
+                )
                 
-                for message in messages:
+                if temp_message:
+                    # Delete the temporary message
                     try:
-                        self.bot.delete_message(channel_id, message.message_id)
+                        self.bot.delete_message(channel_id, temp_message.message_id)
                         deleted_count += 1
-                        time.sleep(0.1)  # Small delay to avoid rate limits
-                    except Exception as e:
-                        # Message might be too old or already deleted
+                    except Exception:
+                        pass
+                
+                # Now try to delete some recent messages around this ID
+                # Most message IDs are sequential, so we'll try a range
+                base_id = temp_message.message_id if temp_message else 0
+                
+                for i in range(1, 51):  # Try to delete 50 recent messages
+                    try:
+                        message_id = base_id - i
+                        if message_id > 0:  # Ensure positive message ID
+                            self.bot.delete_message(channel_id, message_id)
+                            deleted_count += 1
+                            time.sleep(0.05)  # Small delay to avoid rate limits
+                    except Exception:
+                        # Message doesn't exist or already deleted, continue
                         continue
                         
             except Exception as e:
-                logger.error(f"❌ Error getting chat history for channel {channel_id}: {e}")
+                logger.error(f"❌ Error deleting messages from channel {channel_id}: {e}")
             
             return deleted_count
             
