@@ -16,13 +16,18 @@ class LinkHandler:
     def __init__(self, bot: TeleBot):
         self.bot = bot
         self.link_patterns = [
+            # Public channel patterns
             re.compile(r'https://t\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
             re.compile(r'http://t\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
             re.compile(r't\.me/([a-zA-Z0-9_]+)', re.IGNORECASE),
-            re.compile(r'@([a-zA-Z0-9_]+)', re.IGNORECASE)
+            re.compile(r'@([a-zA-Z0-9_]+)', re.IGNORECASE),
+            # Private channel patterns (t.me/+ format)
+            re.compile(r'https://t\.me/\+([a-zA-Z0-9_-]+)', re.IGNORECASE),
+            re.compile(r'http://t\.me/\+([a-zA-Z0-9_-]+)', re.IGNORECASE),
+            re.compile(r't\.me/\+([a-zA-Z0-9_-]+)', re.IGNORECASE)
         ]
         
-        logger.info("✅ Link Handler initialized")
+        logger.info("✅ Link Handler initialized with private channel support")
     
     def extract_telegram_links(self, text: str) -> List[str]:
         """Extract Telegram channel/group links from text"""
@@ -38,6 +43,9 @@ class LinkHandler:
                     # Clean up the username
                     username = match.strip().lower()
                     if username and not username.startswith('_'):  # Skip invalid usernames
+                        # For private channels, add + prefix
+                        if '+' in pattern.pattern:
+                            username = f"+{username}"
                         links.add(username)
             
             return list(links)
@@ -49,21 +57,45 @@ class LinkHandler:
     def resolve_channel_info(self, username: str) -> Optional[Dict[str, Any]]:
         """Resolve channel information from username"""
         try:
-            # Add @ if not present
-            if not username.startswith('@'):
-                username = f"@{username}"
-            
-            # Get chat info
-            chat = self.bot.get_chat(username)
-            
-            return {
-                "channel_id": chat.id,
-                "channel_name": chat.title or chat.first_name or username,
-                "username": chat.username,
-                "type": chat.type,
-                "member_count": getattr(chat, 'member_count', None),
-                "description": getattr(chat, 'description', None)
-            }
+            # Handle private channels (t.me/+ format)
+            if username.startswith('+'):
+                # For private channels, use the invite link directly
+                invite_link = f"https://t.me/{username}"
+                try:
+                    # Get chat info using invite link
+                    chat = self.bot.get_chat(invite_link)
+                    
+                    return {
+                        "channel_id": chat.id,
+                        "channel_name": chat.title or chat.first_name or username,
+                        "username": chat.username,
+                        "type": chat.type,
+                        "member_count": getattr(chat, 'member_count', None),
+                        "description": getattr(chat, 'description', None),
+                        "is_private": True,
+                        "invite_link": invite_link
+                    }
+                except Exception as e:
+                    logger.error(f"❌ Error resolving private channel {username}: {e}")
+                    return None
+            else:
+                # Handle public channels
+                # Add @ if not present
+                if not username.startswith('@'):
+                    username = f"@{username}"
+                
+                # Get chat info
+                chat = self.bot.get_chat(username)
+                
+                return {
+                    "channel_id": chat.id,
+                    "channel_name": chat.title or chat.first_name or username,
+                    "username": chat.username,
+                    "type": chat.type,
+                    "member_count": getattr(chat, 'member_count', None),
+                    "description": getattr(chat, 'description', None),
+                    "is_private": False
+                }
             
         except Exception as e:
             logger.error(f"❌ Error resolving channel info for {username}: {e}")

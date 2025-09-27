@@ -483,12 +483,20 @@ class AdvancedBroadcastBot:
                     self._handle_custom_time_input(user_id, message_text, state)
                     return
             
+            # Check if user is in broadcast mode - if yes, treat as broadcast content
+            if user_id in self.broadcast_states:
+                state = self.broadcast_states[user_id]
+                if state.get("status") == "collecting_content":
+                    # User is in broadcast mode, treat this as broadcast content
+                    self._start_broadcast_flow(user_id, message)
+                    return
+            
             # Check for channel ID in message (format: -1001234567890)
             if message_text and message_text.strip().startswith('-') and message_text.strip().replace('-', '').isdigit():
                 self._handle_channel_id_message(user_id, message_text.strip())
                 return
             
-            # Check for channel links (t.me/ or telegram.me/)
+            # Check for channel links (t.me/ or telegram.me/) - but only if not in broadcast mode
             if message_text and ('t.me/' in message_text or 'telegram.me/' in message_text):
                 self._handle_channel_link_message(user_id, message_text)
                 return
@@ -671,8 +679,11 @@ Use /add command for step-by-step guide.
                 self.bot.send_message(
                     user_id,
                     "❌ <b>No valid channel links found!</b>\n\n"
-                    "Please send valid Telegram channel links.\n"
-                    "Example: https://t.me/yourchannel",
+                    "Please send valid Telegram channel links.\n\n"
+                    "📋 <b>Supported Formats:</b>\n"
+                    "┣ 🌐 Public: https://t.me/yourchannel\n"
+                    "┣ 🔒 Private: https://t.me/+invitecode\n"
+                    "┗ 👤 Username: @yourchannel",
                     parse_mode="HTML"
                 )
                 return
@@ -718,7 +729,15 @@ Use /add command for step-by-step guide.
                 for channel in added_channels:
                     result_text += f"┣ 📋 {channel['channel_name']}\n"
                     if channel.get('username'):
-                        result_text += f"┗ 👤 @{channel['username']}\n\n"
+                        result_text += f"┣ 👤 @{channel['username']}\n"
+                    if channel.get('is_private'):
+                        result_text += f"┣ 🔒 Private Channel\n"
+                        if channel.get('invite_link'):
+                            result_text += f"┗ 🔗 {channel['invite_link']}\n\n"
+                        else:
+                            result_text += f"┗ 🔗 t.me/{link}\n\n"
+                    else:
+                        result_text += f"┗ 🌐 Public Channel\n\n"
             
             if failed_channels:
                 result_text += f"❌ <b>Failed ({len(failed_channels)}):</b>\n"
