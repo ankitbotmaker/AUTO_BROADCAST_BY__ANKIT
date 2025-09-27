@@ -152,7 +152,7 @@ class DatabaseOperations:
             collection = self.db_connection.get_collection(CHANNELS_COLLECTION)
             if collection is None:
                 return []
-            
+    
             query = {"user_id": user_id}
             if active_only:
                 query["is_active"] = True

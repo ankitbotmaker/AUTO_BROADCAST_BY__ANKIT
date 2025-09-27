@@ -87,7 +87,7 @@ class MessageSender:
                 last_error = self._handle_telegram_error(e)
                 if e.error_code in [403, 400]:  # Forbidden or Bad Request - don't retry
                     break
-                
+                    
             except Exception as e:
                 last_error = f"Unexpected error: {str(e)}"
                 logger.error(f"❌ Unexpected error sending to {channel_id}: {e}")

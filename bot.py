@@ -1246,9 +1246,38 @@ Add channels directly using their unique ID.
                     self.bot.answer_callback_query(call.id, "No active broadcast found")
             
             elif call.data == "stop_broadcast":
-                # Stop broadcast
+                # Stop broadcast and cleanup messages
+                self.bot.answer_callback_query(call.id, "🛑 Stopping broadcast and cleaning up...")
+                
+                # Step 1: Stop ongoing broadcast
                 result = self.broadcast_manager.stop_broadcast(user_id)
-                self.bot.answer_callback_query(call.id, result["message"])
+                
+                # Step 2: Stop all auto actions
+                stopped_tasks = self._stop_user_auto_actions(user_id)
+                
+                # Step 3: Cleanup messages from channels
+                deleted_count = self._stop_broadcast_and_cleanup(user_id)
+                
+                # Send confirmation message
+                cleanup_text = f"""
+🛑 <b>Broadcast Stopped & Cleaned Up!</b>
+<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>
+
+<blockquote>
+✅ <b>Broadcast Status:</b> {result.get('message', 'Stopped')}
+🔄 <b>Auto Tasks Stopped:</b> {stopped_tasks}
+🧹 <b>Messages Deleted:</b> {deleted_count}
+</blockquote>
+
+<b>📋 What was cleaned:</b>
+┣ 🛑 Ongoing broadcast stopped
+┣ ⏰ Auto repost/delete cancelled  
+┗ 🗑️ Recent messages deleted from channels
+
+<i>All channels are now clean and ready for new broadcasts!</i>
+                """.strip()
+                
+                self.bot.send_message(user_id, cleanup_text, parse_mode="HTML")
             
             elif call.data == "schedule_broadcast":
                 # Schedule broadcast feature
@@ -2111,10 +2140,15 @@ An error occurred during broadcasting.
             for channel in channels:
                 try:
                     channel_id = channel.get('channel_id')
-                    # Get message ID from the channel (this would need to be stored during send)
-                    # For now, we'll just log the deletion attempt
-                    logger.info(f"🗑️ Auto deleting from channel {channel_id}")
-                    deleted_count += 1
+                    if not channel_id:
+                        continue
+                    
+                    # Delete recent messages from this channel
+                    messages_deleted = self._delete_channel_messages(channel_id)
+                    deleted_count += messages_deleted
+                    
+                    logger.info(f"🗑️ Auto deleted {messages_deleted} messages from channel {channel_id}")
+                    
                 except Exception as e:
                     logger.error(f"Error auto-deleting from channel {channel_id}: {e}")
             
@@ -2123,16 +2157,28 @@ An error occurred during broadcasting.
             
             # Notify user about deletion
             try:
-                self.bot.send_message(
-                    user_id,
-                    f"🗑️ <b>Auto Delete Completed</b>\n\n"
-                    f"<blockquote>Deleted from {deleted_count} channels successfully!</blockquote>",
-                    parse_mode="HTML"
-                )
-            except:
-                pass
+                delete_text = f"""
+🗑️ <b>Auto Delete Completed!</b>
+<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>
+
+<blockquote>
+✅ <b>Messages Deleted:</b> {deleted_count}
+📋 <b>Channels Cleaned:</b> {len(channels)}
+</blockquote>
+
+<b>🧹 What was cleaned:</b>
+┣ 🗑️ Recent messages deleted
+┣ ⏰ Auto delete task completed
+┗ ✨ Channels ready for new content
+
+<i>All channels are now clean and ready!</i>
+                """.strip()
                 
-            logger.info(f"✅ Auto delete completed for broadcast {broadcast_id}")
+                self.bot.send_message(user_id, delete_text, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Error sending delete notification: {e}")
+                
+            logger.info(f"✅ Auto delete completed for broadcast {broadcast_id} - {deleted_count} messages deleted")
             
         except Exception as e:
             logger.error(f"Error in auto delete execution: {e}")
@@ -2144,12 +2190,19 @@ An error occurred during broadcasting.
             for channel in channels:
                 try:
                     channel_id = channel.get('channel_id')
-                    logger.info(f"🗑️ Instant deleting from channel {channel_id}")
-                    deleted_count += 1
+                    if not channel_id:
+                        continue
+                    
+                    # Delete recent messages from this channel
+                    messages_deleted = self._delete_channel_messages(channel_id)
+                    deleted_count += messages_deleted
+                    
+                    logger.info(f"🗑️ Instant deleted {messages_deleted} messages from channel {channel_id}")
+                    
                 except Exception as e:
                     logger.error(f"Error instant deleting from channel {channel_id}: {e}")
                     
-            logger.info(f"✅ Instant delete completed for {deleted_count} channels")
+            logger.info(f"✅ Instant delete completed for {deleted_count} messages across {len(channels)} channels")
             
         except Exception as e:
             logger.error(f"Error in instant delete execution: {e}")
@@ -2221,6 +2274,68 @@ An error occurred during broadcasting.
                 
         except Exception as e:
             logger.error(f"Error stopping auto actions: {e}")
+            return 0
+    
+    def _stop_broadcast_and_cleanup(self, user_id):
+        """Stop ongoing broadcast and cleanup all messages"""
+        try:
+            # Step 1: Stop ongoing broadcast
+            if hasattr(self, 'broadcast_manager'):
+                self.broadcast_manager.stop_broadcast(user_id)
+            
+            # Step 2: Get all channels for user
+            channels = self.db_ops.get_user_channels(user_id)
+            if not channels:
+                return 0
+            
+            # Step 3: Delete all messages from all channels
+            deleted_count = 0
+            for channel in channels:
+                channel_id = channel.get('channel_id')
+                if not channel_id:
+                    continue
+                
+                try:
+                    # Get recent messages from this channel
+                    messages_deleted = self._delete_channel_messages(channel_id)
+                    deleted_count += messages_deleted
+                    
+                except Exception as e:
+                    logger.error(f"❌ Error deleting messages from channel {channel_id}: {e}")
+            
+            logger.info(f"🧹 Cleaned up {deleted_count} messages for user {user_id}")
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error in stop broadcast and cleanup: {e}")
+            return 0
+    
+    def _delete_channel_messages(self, channel_id):
+        """Delete recent messages from a channel"""
+        try:
+            deleted_count = 0
+            
+            # Get recent messages (last 50 messages)
+            try:
+                # Try to get recent messages using get_chat_history
+                messages = self.bot.get_chat_history(channel_id, limit=50)
+                
+                for message in messages:
+                    try:
+                        self.bot.delete_message(channel_id, message.message_id)
+                        deleted_count += 1
+                        time.sleep(0.1)  # Small delay to avoid rate limits
+                    except Exception as e:
+                        # Message might be too old or already deleted
+                        continue
+                        
+            except Exception as e:
+                logger.error(f"❌ Error getting chat history for channel {channel_id}: {e}")
+            
+            return deleted_count
+            
+        except Exception as e:
+            logger.error(f"❌ Error deleting messages from channel {channel_id}: {e}")
             return 0
     
     def _handle_custom_time_input(self, user_id: int, time_text: str, state: Dict):

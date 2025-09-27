@@ -54,7 +54,7 @@ def setup_logger(name: str, level: str = "INFO", log_file: Optional[str] = None)
             file_handler.setLevel(logging.DEBUG)
             file_handler.setFormatter(detailed_formatter)
             logger.addHandler(file_handler)
-            
+    
         except Exception as e:
             logger.warning(f"Could not setup file logging: {e}")
     

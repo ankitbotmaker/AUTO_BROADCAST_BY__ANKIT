@@ -1,99 +1,72 @@
-#!/usr/bin/env python3
 """
-Helpers
-Utility helper functions for common operations
+Helper Functions Module
+Contains utility and helper functions
 """
 
-import logging
+import re
 import time
 import hashlib
-import random
-import string
+import logging
+from typing import List, Dict, Any, Optional, Union
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any, Union
-import json
+import asyncio
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
 
 class Helpers:
-    """Collection of utility helper functions"""
+    """Helper functions for the bot"""
     
     def __init__(self):
         logger.info("✅ Helpers initialized")
     
-    def generate_unique_id(self, prefix: str = "", length: int = 8) -> str:
-        """Generate a unique ID"""
-        try:
-            timestamp = str(int(time.time()))
-            random_chars = ''.join(random.choices(string.ascii_lowercase + string.digits, k=length))
-            
-            if prefix:
-                return f"{prefix}_{timestamp}_{random_chars}"
-            else:
-                return f"{timestamp}_{random_chars}"
-        except Exception as e:
-            logger.error(f"❌ Error generating unique ID: {e}")
-            return f"id_{int(time.time())}"
-    
-    def generate_hash(self, text: str, algorithm: str = "md5") -> str:
-        """Generate hash for text"""
-        try:
-            if algorithm == "md5":
-                return hashlib.md5(text.encode()).hexdigest()
-            elif algorithm == "sha256":
-                return hashlib.sha256(text.encode()).hexdigest()
-            elif algorithm == "sha1":
-                return hashlib.sha1(text.encode()).hexdigest()
-            else:
-                return hashlib.md5(text.encode()).hexdigest()
-        except Exception as e:
-            logger.error(f"❌ Error generating hash: {e}")
-            return ""
-    
-    def format_timestamp(self, timestamp: Union[datetime, int, float], 
-                        format_str: str = "%Y-%m-%d %H:%M:%S") -> str:
-        """Format timestamp to string"""
+    def format_timestamp(self, timestamp: Union[datetime, float, int]) -> str:
+        """Format timestamp to human readable string"""
         try:
             if isinstance(timestamp, (int, float)):
-                dt = datetime.fromtimestamp(timestamp)
-            elif isinstance(timestamp, datetime):
-                dt = timestamp
-            else:
-                return str(timestamp)
+                timestamp = datetime.fromtimestamp(timestamp)
             
-            return dt.strftime(format_str)
+            return timestamp.strftime("%Y-%m-%d %H:%M:%S")
+            
         except Exception as e:
             logger.error(f"❌ Error formatting timestamp: {e}")
-            return str(timestamp)
+            return "Unknown"
     
     def parse_time_string(self, time_str: str) -> Optional[int]:
-        """Parse time string to minutes (e.g., '1h 30m', '45m', '2d')"""
+        """Parse time string to minutes"""
         try:
-            time_str = time_str.lower().strip()
-            total_minutes = 0
+            if not time_str or not isinstance(time_str, str):
+                return None
             
-            # Time unit patterns
+            time_str = time_str.strip().lower()
+            
+            # Patterns for different time formats
             patterns = {
-                'days': ['d', 'day', 'days'],
-                'hours': ['h', 'hour', 'hours'],
-                'minutes': ['m', 'min', 'minute', 'minutes']
+                'minutes': ['m', 'min', 'minute', 'minutes'],
+                'hours': ['h', 'hr', 'hour', 'hours'],
+                'days': ['d', 'day', 'days']
             }
             
-            # Extract numbers and units
-            import re
-            matches = re.findall(r'(\d+)\s*([a-z]+)', time_str)
+            total_minutes = 0
             
-            for value, unit in matches:
-                value = int(value)
-                
-                if unit in patterns['days']:
-                    total_minutes += value * 24 * 60
-                elif unit in patterns['hours']:
-                    total_minutes += value * 60
-                elif unit in patterns['minutes']:
-                    total_minutes += value
+            # Extract numbers and units
+            for pattern in patterns['minutes']:
+                matches = re.findall(rf'(\d+)\s*{pattern}', time_str)
+                for match in matches:
+                    total_minutes += int(match)
+            
+            for pattern in patterns['hours']:
+                matches = re.findall(rf'(\d+)\s*{pattern}', time_str)
+                for match in matches:
+                    total_minutes += int(match) * 60
+            
+            for pattern in patterns['days']:
+                matches = re.findall(rf'(\d+)\s*{pattern}', time_str)
+                for match in matches:
+                    total_minutes += int(match) * 1440
             
             return total_minutes if total_minutes > 0 else None
+            
         except Exception as e:
             logger.error(f"❌ Error parsing time string: {e}")
             return None
@@ -103,7 +76,7 @@ class Helpers:
         try:
             if minutes < 60:
                 return f"{minutes}m"
-            elif minutes < 1440:  # Less than 24 hours
+            elif minutes < 1440:  # Less than a day
                 hours = minutes // 60
                 mins = minutes % 60
                 if mins == 0:
@@ -117,6 +90,7 @@ class Helpers:
                     return f"{days}d"
                 else:
                     return f"{days}d {hours}h"
+            
         except Exception as e:
             logger.error(f"❌ Error formatting duration: {e}")
             return f"{minutes}m"
@@ -127,20 +101,101 @@ class Helpers:
             if completed == 0 or total == 0:
                 return "Unknown"
             
-            elapsed = datetime.utcnow() - start_time
-            rate = completed / elapsed.total_seconds()  # items per second
+            elapsed = datetime.now() - start_time
+            rate = completed / elapsed.total_seconds()
             remaining = total - completed
             
             if rate == 0:
                 return "Unknown"
             
             eta_seconds = remaining / rate
-            eta_time = datetime.utcnow() + timedelta(seconds=eta_seconds)
+            eta = start_time + timedelta(seconds=eta_seconds)
             
-            return eta_time.strftime("%H:%M:%S")
+            return eta.strftime("%H:%M:%S")
+            
         except Exception as e:
             logger.error(f"❌ Error calculating ETA: {e}")
             return "Unknown"
+    
+    def get_safe_filename(self, filename: str) -> str:
+        """Get safe filename by removing invalid characters"""
+        try:
+            # Remove invalid characters
+            safe_chars = re.sub(r'[<>:"/\\|?*]', '_', filename)
+            # Remove multiple underscores
+            safe_chars = re.sub(r'_+', '_', safe_chars)
+            # Remove leading/trailing underscores
+            safe_chars = safe_chars.strip('_')
+            
+            return safe_chars if safe_chars else "file"
+            
+        except Exception as e:
+            logger.error(f"❌ Error creating safe filename: {e}")
+            return "file"
+    
+    def retry_on_exception(self, func, max_retries: int = 3, delay: float = 1.0):
+        """Retry function on exception"""
+        def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    time.sleep(delay * (2 ** attempt))
+            return None
+        return wrapper
+    
+    def async_retry_on_exception(self, func, max_retries: int = 3, delay: float = 1.0):
+        """Async retry function on exception"""
+        async def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise e
+                    await asyncio.sleep(delay * (2 ** attempt))
+            return None
+        return wrapper
+    
+    def run_concurrent_tasks(self, tasks: List[callable], max_workers: int = 5) -> List[Any]:
+        """Run tasks concurrently"""
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(task) for task in tasks]
+                results = [future.result() for future in concurrent.futures.as_completed(futures)]
+                return results
+        except Exception as e:
+            logger.error(f"❌ Error running concurrent tasks: {e}")
+            return []
+    
+    def create_progress_tracker(self, total: int) -> Dict[str, Any]:
+        """Create progress tracker"""
+        return {
+            "total": total,
+            "completed": 0,
+            "failed": 0,
+            "start_time": datetime.now(),
+            "last_update": datetime.now()
+        }
+    
+    def update_progress(self, tracker: Dict[str, Any], completed: int = 1, failed: int = 0):
+        """Update progress tracker"""
+        try:
+            tracker["completed"] += completed
+            tracker["failed"] += failed
+            tracker["last_update"] = datetime.now()
+            
+            # Calculate progress percentage
+            total = tracker["total"]
+            if total > 0:
+                tracker["progress"] = (tracker["completed"] + tracker["failed"]) / total * 100
+            else:
+                tracker["progress"] = 0
+                
+        except Exception as e:
+            logger.error(f"❌ Error updating progress: {e}")
     
     def format_file_size(self, size_bytes: int) -> str:
         """Format file size in human readable format"""
@@ -150,167 +205,118 @@ class Helpers:
             
             size_names = ["B", "KB", "MB", "GB", "TB"]
             i = 0
-                
             while size_bytes >= 1024 and i < len(size_names) - 1:
                 size_bytes /= 1024.0
                 i += 1
             
             return f"{size_bytes:.1f} {size_names[i]}"
+            
         except Exception as e:
             logger.error(f"❌ Error formatting file size: {e}")
             return "Unknown"
     
-    def safe_json_loads(self, json_str: str, default: Any = None) -> Any:
-        """Safely load JSON with fallback"""
+    def is_valid_timezone(self, timezone: str) -> bool:
+        """Check if timezone is valid"""
         try:
-            return json.loads(json_str) if json_str else default
-        except Exception as e:
-            logger.warning(f"⚠️ Error parsing JSON: {e}")
-            return default
+            import pytz
+            pytz.timezone(timezone)
+            return True
+        except Exception:
+            return False
     
-    def safe_json_dumps(self, obj: Any, default: str = "{}") -> str:
-        """Safely dump JSON with fallback"""
+    def get_timezone_offset(self, timezone: str) -> str:
+        """Get timezone offset"""
         try:
-            return json.dumps(obj, default=str, ensure_ascii=False)
+            import pytz
+            tz = pytz.timezone(timezone)
+            now = datetime.now(tz)
+            offset = now.strftime('%z')
+            return f"UTC{offset[:3]}:{offset[3:]}"
         except Exception as e:
-            logger.warning(f"⚠️ Error dumping JSON: {e}")
-            return default
+            logger.error(f"❌ Error getting timezone offset: {e}")
+            return "UTC+00:00"
     
-    def chunk_list(self, lst: List[Any], chunk_size: int) -> List[List[Any]]:
-        """Split list into chunks"""
-        try:
-            return [lst[i:i + chunk_size] for i in range(0, len(lst), chunk_size)]
-        except Exception as e:
-            logger.error(f"❌ Error chunking list: {e}")
-            return [lst] if lst else []
-    
-    def deduplicate_list(self, lst: List[Any], key_func: callable = None) -> List[Any]:
-        """Remove duplicates from list"""
-        try:
-            if key_func:
-                seen = set()
-                result = []
-                for item in lst:
-                    key = key_func(item)
-                    if key not in seen:
-                        seen.add(key)
-                        result.append(item)
-                return result
-            else:
-                return list(dict.fromkeys(lst))  # Preserves order
-        except Exception as e:
-            logger.error(f"❌ Error deduplicating list: {e}")
-            return lst
-    
-    def retry_operation(self, func: callable, max_retries: int = 3, 
-                       delay: float = 1.0, *args, **kwargs) -> Any:
-        """Retry an operation with exponential backoff"""
-        try:
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise e
-                    
-                    logger.warning(f"⚠️ Attempt {attempt + 1} failed: {e}")
-                    time.sleep(delay * (2 ** attempt))  # Exponential backoff
-        except Exception as e:
-            logger.error(f"❌ All retry attempts failed: {e}")
-            raise e
-    
-    def get_safe_filename(self, filename: str, max_length: int = 255) -> str:
-        """Get safe filename by removing invalid characters"""
-        try:
-            # Remove invalid characters
-            invalid_chars = '<>:"/\\|?*'
-            safe_name = ''.join(c for c in filename if c not in invalid_chars)
-            
-            # Replace spaces with underscores
-            safe_name = safe_name.replace(' ', '_')
-            
-            # Limit length
-            if len(safe_name) > max_length:
-                name, ext = safe_name.rsplit('.', 1) if '.' in safe_name else (safe_name, '')
-                max_name_length = max_length - len(ext) - 1 if ext else max_length
-                safe_name = name[:max_name_length] + ('.' + ext if ext else '')
-            
-            return safe_name or "file"
-        except Exception as e:
-            logger.error(f"❌ Error creating safe filename: {e}")
-            return "file"
-    
-    def calculate_percentage(self, part: Union[int, float], 
-                           total: Union[int, float], precision: int = 1) -> float:
-        """Calculate percentage with safe division"""
+    def create_loading_indicator(self, current: int, total: int, width: int = 20) -> str:
+        """Create loading indicator"""
         try:
             if total == 0:
-                return 0.0
-            return round((part / total) * 100, precision)
+                return "[" + " " * width + "] 0%"
+            
+            progress = current / total
+            filled = int(width * progress)
+            bar = "█" * filled + "░" * (width - filled)
+            percentage = int(progress * 100)
+            
+            return f"[{bar}] {percentage}%"
+            
         except Exception as e:
-            logger.error(f"❌ Error calculating percentage: {e}")
-            return 0.0
+            logger.error(f"❌ Error creating loading indicator: {e}")
+            return "[░░░░░░░░░░░░░░░░░░░░] 0%"
     
-    def merge_dicts(self, *dicts: Dict[str, Any]) -> Dict[str, Any]:
-        """Merge multiple dictionaries"""
-        try:
-            result = {}
-            for d in dicts:
-                if isinstance(d, dict):
-                    result.update(d)
-            return result
-        except Exception as e:
-            logger.error(f"❌ Error merging dictionaries: {e}")
-            return {}
+    def create_status_emoji(self, status: str) -> str:
+        """Create status emoji"""
+        status_emojis = {
+            "success": "✅",
+            "error": "❌",
+            "warning": "⚠️",
+            "info": "ℹ️",
+            "loading": "⏳",
+            "pending": "⏸️",
+            "running": "🔄",
+            "stopped": "🛑"
+        }
+        return status_emojis.get(status.lower(), "❓")
     
-    def get_nested_value(self, data: Dict[str, Any], key_path: str, 
-                        default: Any = None, separator: str = ".") -> Any:
-        """Get nested value from dictionary using dot notation"""
-        try:
-            keys = key_path.split(separator)
-            value = data
-            
-            for key in keys:
-                if isinstance(value, dict) and key in value:
-                    value = value[key]
-                else:
-                    return default
-            
-            return value
-        except Exception as e:
-            logger.error(f"❌ Error getting nested value: {e}")
-            return default
+    def create_priority_emoji(self, priority: int) -> str:
+        """Create priority emoji"""
+        if priority >= 3:
+            return "🔴"
+        elif priority >= 2:
+            return "🟡"
+        else:
+            return "🟢"
     
-    def set_nested_value(self, data: Dict[str, Any], key_path: str, 
-                        value: Any, separator: str = ".") -> bool:
-        """Set nested value in dictionary using dot notation"""
+    def sanitize_filename(self, filename: str) -> str:
+        """Sanitize filename for safe storage"""
         try:
-            keys = key_path.split(separator)
-            current = data
+            # Remove or replace invalid characters
+            invalid_chars = '<>:"/\\|?*'
+            for char in invalid_chars:
+                filename = filename.replace(char, '_')
             
-            for key in keys[:-1]:
-                if key not in current:
-                    current[key] = {}
-                current = current[key]
+            # Remove multiple underscores
+            filename = re.sub(r'_+', '_', filename)
             
-            current[keys[-1]] = value
-            return True
+            # Remove leading/trailing underscores and dots
+            filename = filename.strip('_.')
+            
+            return filename if filename else "file"
+            
         except Exception as e:
-            logger.error(f"❌ Error setting nested value: {e}")
+            logger.error(f"❌ Error sanitizing filename: {e}")
+            return "file"
+    
+    def create_checksum(self, data: str) -> str:
+        """Create checksum for data"""
+        try:
+            return hashlib.md5(data.encode()).hexdigest()
+        except Exception as e:
+            logger.error(f"❌ Error creating checksum: {e}")
+            return ""
+    
+    def validate_checksum(self, data: str, checksum: str) -> bool:
+        """Validate checksum"""
+        try:
+            return self.create_checksum(data) == checksum
+        except Exception as e:
+            logger.error(f"❌ Error validating checksum: {e}")
             return False
     
-    def is_url(self, text: str) -> bool:
-        """Check if text is a URL"""
+    def create_short_url(self, url: str) -> str:
+        """Create short URL (placeholder)"""
         try:
-            import re
-            url_pattern = re.compile(
-                r'^https?://'  # http:// or https://
-                r'(?:(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z]{2,6}\.?|'  # domain...
-                r'localhost|'  # localhost...
-                r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'  # ...or ip
-                r'(?::\d+)?'  # optional port
-                r'(?:/?|[/?]\S+)$', re.IGNORECASE)
-            return url_pattern.match(text) is not None
+            # This is a placeholder - in real implementation, you'd use a URL shortener service
+            return url
         except Exception as e:
-            logger.error(f"❌ Error checking URL: {e}")
-            return False
+            logger.error(f"❌ Error creating short URL: {e}")
+            return url

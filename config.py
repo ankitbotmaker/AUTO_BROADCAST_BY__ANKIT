@@ -20,7 +20,7 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in environment variables!")
 
 # Admin Configuration
-ADMIN_IDS = os.getenv("ADMIN_IDS", "22746239,7792539085").split(",") if os.getenv("ADMIN_IDS") else ["22746239", "7792539085"]
+ADMIN_IDS = os.getenv("ADMIN_IDS", "7792539085").split(",") if os.getenv("ADMIN_IDS") else ["7792539085"]
 ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS if admin_id.strip().isdigit()]
 
 # Owner Configuration (for premium activation)
@@ -48,7 +48,7 @@ BOT_MESSAGES_COLLECTION = "bot_messages"
 # =============================================================================
 
 # Telegram API (Optional - for advanced features)
-API_ID = os.getenv("API_ID")
+API_ID = os.getenv("API_ID", "22746239")
 API_HASH = os.getenv("API_HASH", "a98ec8cfd8572a3a7c936cf828fe6215")
 
 # =============================================================================
