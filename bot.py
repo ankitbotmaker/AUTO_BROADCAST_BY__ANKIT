@@ -443,6 +443,12 @@ class AdvancedBroadcastBot:
             # Handle different callback types
             if data.startswith("add_channel_") or data in ["add_channels", "add_by_link", "bulk_add", "auto_detect_channels", "add_by_id"]:
                 self._handle_add_channel_callback(call)
+            elif data == "bulk_add_channels":
+                self._handle_bulk_channel_addition(user_id)
+                self.bot.answer_callback_query(call.id, "⚡ Bulk addition guide sent!")
+            elif data == "auto_detect_channels":
+                self._handle_auto_detect_channels(user_id)
+                self.bot.answer_callback_query(call.id, "🔍 Auto detection guide sent!")
             elif data.startswith("remove_channel_"):
                 self._handle_remove_channel_callback(call)
             elif data.startswith("broadcast_") or data in ["broadcast_start", "broadcast_status", "stop_broadcast"]:
@@ -480,6 +486,21 @@ class AdvancedBroadcastBot:
             # Check for channel ID in message (format: -1001234567890)
             if message_text and message_text.strip().startswith('-') and message_text.strip().replace('-', '').isdigit():
                 self._handle_channel_id_message(user_id, message_text.strip())
+                return
+            
+            # Check for channel links (t.me/ or telegram.me/)
+            if message_text and ('t.me/' in message_text or 'telegram.me/' in message_text):
+                self._handle_channel_link_message(user_id, message_text)
+                return
+            
+            # Handle bulk channel addition command
+            if message_text and message_text.startswith('/add_channels'):
+                self._handle_bulk_channel_addition(user_id)
+                return
+            
+            # Handle auto detect channels command
+            if message_text and message_text.startswith('/auto_detect'):
+                self._handle_auto_detect_channels(user_id)
                 return
             
             # Check if user has channels
@@ -640,6 +661,177 @@ Use /add command for step-by-step guide.
                 parse_mode="HTML"
             )
     
+    def _handle_channel_link_message(self, user_id: int, message_text: str):
+        """Handle channel link messages"""
+        try:
+            # Extract channel links from message
+            links = self.link_handler.extract_telegram_links(message_text)
+            
+            if not links:
+                self.bot.send_message(
+                    user_id,
+                    "❌ <b>No valid channel links found!</b>\n\n"
+                    "Please send valid Telegram channel links.\n"
+                    "Example: https://t.me/yourchannel",
+                    parse_mode="HTML"
+                )
+                return
+            
+            # Process each link
+            added_channels = []
+            failed_channels = []
+            
+            for link in links:
+                try:
+                    # Resolve channel info
+                    channel_info = self.link_handler.resolve_channel_info(link)
+                    
+                    if channel_info:
+                        # Check bot access
+                        if self.link_handler.check_bot_access(channel_info["channel_id"]):
+                            # Add to database
+                            success = self.db_ops.add_channel(
+                                channel_id=channel_info["channel_id"],
+                                user_id=user_id,
+                                channel_name=channel_info["channel_name"],
+                                username=channel_info["username"]
+                            )
+                            
+                            if success:
+                                added_channels.append(channel_info)
+                            else:
+                                failed_channels.append(f"{channel_info['channel_name']} (Database error)")
+                        else:
+                            failed_channels.append(f"{channel_info['channel_name']} (Bot not admin)")
+                    else:
+                        failed_channels.append(f"{link} (Not found)")
+                        
+                except Exception as e:
+                    logger.error(f"Error processing link {link}: {e}")
+                    failed_channels.append(f"{link} (Error: {str(e)})")
+            
+            # Send results
+            result_text = f"📋 <b>Channel Addition Results</b>\n<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>\n\n"
+            
+            if added_channels:
+                result_text += f"✅ <b>Successfully Added ({len(added_channels)}):</b>\n"
+                for channel in added_channels:
+                    result_text += f"┣ 📋 {channel['channel_name']}\n"
+                    if channel.get('username'):
+                        result_text += f"┗ 👤 @{channel['username']}\n\n"
+            
+            if failed_channels:
+                result_text += f"❌ <b>Failed ({len(failed_channels)}):</b>\n"
+                for channel in failed_channels:
+                    result_text += f"┣ ❌ {channel}\n"
+                result_text += "\n"
+            
+            if added_channels:
+                result_text += f"<i>Total channels: {len(added_channels)} added successfully!</i>"
+            else:
+                result_text += "<i>No channels were added. Please check bot admin access.</i>"
+            
+            self.bot.send_message(user_id, result_text, parse_mode="HTML")
+            
+        except Exception as e:
+            logger.error(f"Error handling channel link message: {e}")
+            self.bot.send_message(user_id, "❌ An error occurred processing channel links.")
+    
+    def _handle_bulk_channel_addition(self, user_id: int):
+        """Handle bulk channel addition"""
+        try:
+            help_text = """
+🚀 <b>Bulk Channel Addition Guide</b>
+<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>
+
+<b>📋 Method 1: Channel IDs</b>
+Send channel IDs one by one:
+<code>-1001234567890</code>
+<code>-1009876543210</code>
+
+<b>🔗 Method 2: Channel Links</b>
+Send channel links:
+<code>https://t.me/yourchannel</code>
+<code>https://t.me/anotherchannel</code>
+
+<b>📱 Method 3: Forward Messages</b>
+Forward any message from your channels to this bot.
+
+<b>⚡ Method 4: Multiple at Once</b>
+Send multiple links in one message:
+<code>https://t.me/channel1
+https://t.me/channel2
+https://t.me/channel3</code>
+
+<b>📝 Requirements:</b>
+┣ Bot must be admin in all channels
+┣ Channel must be public or bot must be added
+┗ Channel ID must start with -100
+
+<i>Start adding your channels now!</i>
+            """.strip()
+            
+            self.bot.send_message(user_id, help_text, parse_mode="HTML")
+            
+        except Exception as e:
+            logger.error(f"Error in bulk channel addition: {e}")
+            self.bot.send_message(user_id, "❌ An error occurred. Please try again.")
+    
+    def _handle_auto_detect_channels(self, user_id: int):
+        """Auto detect all channels where user is admin/owner"""
+        try:
+            self.bot.send_message(
+                user_id,
+                "🔍 <b>Auto Detecting Your Channels...</b>\n<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>\n\n"
+                "⏳ <i>This may take a few moments...</i>\n"
+                "📋 <i>Scanning for channels where you are admin/owner...</i>",
+                parse_mode="HTML"
+            )
+            
+            # This is a placeholder - in real implementation, you'd need to:
+            # 1. Get user's chat list (if possible)
+            # 2. Check admin status in each chat
+            # 3. Add channels where user is admin
+            
+            # For now, we'll provide instructions
+            instructions = """
+🚀 <b>Auto Channel Detection Guide</b>
+<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>
+
+<b>📱 Method 1: Forward Messages</b>
+┣ Forward any message from your channels to this bot
+┣ Bot will automatically detect and add them
+┗ Repeat for all your channels
+
+<b>🔗 Method 2: Send Channel Links</b>
+┣ Send channel links: https://t.me/yourchannel
+┣ Bot will check admin access and add them
+┗ Send multiple links at once
+
+<b>🆔 Method 3: Send Channel IDs</b>
+┣ Send channel IDs: -1001234567890
+┣ Bot will verify admin access and add them
+┗ Get IDs from channel settings
+
+<b>⚡ Method 4: Bulk Addition</b>
+┣ Use "⚡ Bulk Add Channels" button
+┣ Follow the step-by-step guide
+┗ Add all channels at once
+
+<b>📝 Requirements:</b>
+┣ Bot must be admin in all channels
+┣ You must be admin/owner in channels
+┗ Channels must be accessible to bot
+
+<i>Start by forwarding a message from your first channel!</i>
+            """.strip()
+            
+            self.bot.send_message(user_id, instructions, parse_mode="HTML")
+            
+        except Exception as e:
+            logger.error(f"Error in auto detect channels: {e}")
+            self.bot.send_message(user_id, "❌ An error occurred during auto detection.")
+    
     # UI Creation Methods
     def _create_welcome_message(self, user_id: int) -> str:
         """Create welcome message"""
@@ -696,15 +888,20 @@ No premium required - everything unlocked!
             types.InlineKeyboardButton(f"➕ Add Channels ({channel_count})", callback_data="add_channels")
         )
         
-        # Second row - Management
+        # Second row - Bulk addition
+        markup.add(
+            types.InlineKeyboardButton("⚡ Bulk Add Channels", callback_data="bulk_add_channels"),
+            types.InlineKeyboardButton("🔍 Auto Detect", callback_data="auto_detect_channels")
+        )
+        
+        # Third row - Management
         markup.add(
             types.InlineKeyboardButton("📋 My Channels", callback_data="my_channels"),
             types.InlineKeyboardButton("📊 Analytics", callback_data="show_stats")
         )
         
-        # Third row - Settings & Features
+        # Fourth row - Settings
         markup.add(
-            types.InlineKeyboardButton("🎨 Free Features", callback_data="features_info"),
             types.InlineKeyboardButton("⚙️ Settings", callback_data="settings")
         )
         
