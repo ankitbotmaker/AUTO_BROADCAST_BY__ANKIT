@@ -29,6 +29,15 @@ ENV/
 env.bak/
 venv.bak/
 
+# Encrypted configuration files
+secure_config.enc
+config.enc
+*.enc
+
+# Sensitive data
+secrets.json
+credentials.json
+
 # Logs
 *.log
 logs/
