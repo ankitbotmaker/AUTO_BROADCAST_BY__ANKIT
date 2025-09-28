@@ -38,6 +38,10 @@ config.enc
 secrets.json
 credentials.json
 
+# User-specific files
+user_data/
+personal_config/
+
 # Logs
 *.log
 logs/

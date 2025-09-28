@@ -1,13 +1,16 @@
 # Telegram Bot Configuration Template
 # Copy this to .env and fill in your actual values
 
+# Required Variables
 BOT_TOKEN=your_bot_token_here
-MONGO_URL=mongodb+srv://herukobanna:ankit999@cluster0.xs772me.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0
-ADMIN_IDS=7792539085
-OWNER_ID=7792539085
-API_ID=22746239
-API_HASH=a98ec8cfd8572a3a7c936cf828fe6215
-ENCRYPTION_KEY=ICUMsdYK-7yMW7ouuOsrnwxib72euBp8_elO_NWnbw4=
+MONGO_URL=your_mongodb_connection_string_here
+ADMIN_IDS=your_admin_user_id_here
+OWNER_ID=your_owner_user_id_here
+
+# Optional Variables
+API_ID=your_telegram_api_id_here
+API_HASH=your_telegram_api_hash_here
+ENCRYPTION_KEY=your_encryption_key_here
 
 # Optional Configuration
 WEBHOOK_URL=your_webhook_url_here

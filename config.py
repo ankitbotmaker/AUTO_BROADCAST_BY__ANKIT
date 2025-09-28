@@ -20,18 +20,22 @@ if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN not found in environment variables!")
 
 # Admin Configuration
-ADMIN_IDS = os.getenv("ADMIN_IDS", "7792539085").split(",") if os.getenv("ADMIN_IDS") else ["7792539085"]
-ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS if admin_id.strip().isdigit()]
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
+if not ADMIN_IDS_STR:
+    raise ValueError("ADMIN_IDS not found in environment variables!")
+ADMIN_IDS = [int(admin_id.strip()) for admin_id in ADMIN_IDS_STR.split(",") if admin_id.strip().isdigit()]
 
 # Owner Configuration (for premium activation)
-OWNER_ID = int(os.getenv("OWNER_ID", "7792539085"))
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
 # =============================================================================
 # DATABASE CONFIGURATION
 # =============================================================================
 
 # MongoDB Configuration
-MONGO_URL = os.getenv("MONGO_URL", "mongodb+srv://herukobanna:ankit999@cluster0.xs772me.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
+MONGO_URL = os.getenv("MONGO_URL")
+if not MONGO_URL:
+    raise ValueError("MONGO_URL not found in environment variables!")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "telegram_broadcast_bot")
 
 # Collection Names
@@ -48,8 +52,8 @@ BOT_MESSAGES_COLLECTION = "bot_messages"
 # =============================================================================
 
 # Telegram API (Optional - for advanced features)
-API_ID = os.getenv("API_ID", "22746239")
-API_HASH = os.getenv("API_HASH", "a98ec8cfd8572a3a7c936cf828fe6215")
+API_ID = os.getenv("API_ID")
+API_HASH = os.getenv("API_HASH")
 
 # =============================================================================
 # BROADCAST CONFIGURATION
