@@ -1,4 +1,10 @@
 # 🚀 Encrypted Bot Deployment Guide
+## **By Ankit - Professional Bot Developer**
+
+[![Made by Ankit](https://img.shields.io/badge/Made%20by-Ankit-blue?style=for-the-badge&logo=github)](https://github.com/ankitbotmaker)
+[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-blue?style=for-the-badge&logo=telegram)](https://t.me/your_bot_username)
+
+> **🔥 Professional deployment guide created by [Ankit](https://github.com/ankitbotmaker)**
 
 ## 🔐 Encryption Options for Your Telegram Bot
 
@@ -194,3 +200,5 @@ If you need help with encryption or deployment:
 ---
 
 **🎉 Your bot is now secure and deployment-ready!**
+
+**🔥 Made with ❤️ by [Ankit](https://github.com/ankitbotmaker) - Professional Bot Developer**

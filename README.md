@@ -1,6 +1,13 @@
 # 🚀 Advanced Telegram Broadcast Bot
+## **By Ankit - Professional Bot Developer**
+
+[![Made by Ankit](https://img.shields.io/badge/Made%20by-Ankit-blue?style=for-the-badge&logo=github)](https://github.com/ankitbotmaker)
+[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-blue?style=for-the-badge&logo=telegram)](https://t.me/your_bot_username)
+[![Python](https://img.shields.io/badge/Python-3.8+-green?style=for-the-badge&logo=python)](https://python.org)
 
 A powerful, feature-rich Telegram bot for broadcasting messages to multiple channels with advanced automation features.
+
+> **🔥 Created by [Ankit](https://github.com/ankitbotmaker) - Professional Bot Developer & Automation Expert**
 
 ## ✨ Features
 
@@ -216,9 +223,23 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🤝 Support
 
-- **Issues**: [GitHub Issues](https://github.com/yourusername/bbbot/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/bbbot/discussions)
-- **Documentation**: [Wiki](https://github.com/yourusername/bbbot/wiki)
+- **Issues**: [GitHub Issues](https://github.com/ankitbotmaker/AUTO_BROADCAST_BY__ANKIT/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/ankitbotmaker/AUTO_BROADCAST_BY__ANKIT/discussions)
+- **Documentation**: [Wiki](https://github.com/ankitbotmaker/AUTO_BROADCAST_BY__ANKIT/wiki)
+- **Contact Ankit**: [GitHub Profile](https://github.com/ankitbotmaker)
+
+## 👨‍💻 About the Developer
+
+**Ankit** - Professional Bot Developer & Automation Expert
+- 🚀 **Specialization**: Telegram Bots, Automation, Python Development
+- 💼 **Experience**: Advanced bot development with modern features
+- 🔧 **Skills**: Python, Telegram API, MongoDB, Encryption, Deployment
+- 🌟 **Mission**: Creating powerful, user-friendly automation solutions
+
+### **Connect with Ankit:**
+- **GitHub**: [@ankitbotmaker](https://github.com/ankitbotmaker)
+- **Portfolio**: Professional bot development services
+- **Support**: Available for custom bot development
 
 ## 🙏 Acknowledgments
 
@@ -233,3 +254,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 **🐛 Found a bug? Please report it in the issues section.**
 
 **💡 Have a feature request? Let us know!**
+
+**🔥 Made with ❤️ by [Ankit](https://github.com/ankitbotmaker)**

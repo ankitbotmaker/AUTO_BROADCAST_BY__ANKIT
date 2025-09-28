@@ -876,6 +876,12 @@ https://t.me/channel3</code>
 No premium required - everything unlocked!
 </blockquote>
 
+<b>👨‍💻 Developed by <a href="https://github.com/ankitbotmaker">Ankit</a></b>
+<blockquote>
+🚀 Professional Bot Developer & Automation Expert
+💼 Specialized in Telegram Bots & Python Development
+</blockquote>
+
 🚀 <b>What You Can Do:</b>
 ┣ 📢 <b>Multi-Channel Broadcasting</b> - Send to unlimited channels
 ┣ ⚡ <b>Auto Repost & Delete</b> - Smart automation
@@ -892,6 +898,9 @@ No premium required - everything unlocked!
 <code>4. Hit "📢 Broadcast" and go!</code>
 
 💡 <b>Pro Tip:</b> Just send me a message with channel links - I'll auto-detect and add them!
+
+<i>━━━━━━━━━━━━━━━━━━━━━━━━━━━</i>
+<b>🔥 Made with ❤️ by <a href="https://github.com/ankitbotmaker">Ankit</a></b>
         """.strip()
     
     def _create_main_menu_keyboard(self, user_id: int) -> types.InlineKeyboardMarkup:
@@ -3288,7 +3297,7 @@ All features are automatically available.
     def start_polling(self):
         """Start bot polling"""
         try:
-            logger.info("🚀 Starting Advanced Broadcast Bot...")
+            logger.info("🚀 Starting Advanced Broadcast Bot by Ankit...")
             self.bot.infinity_polling(none_stop=True, timeout=60, long_polling_timeout=60)
         except Exception as e:
             logger.error(f"❌ Bot polling error: {e}")
