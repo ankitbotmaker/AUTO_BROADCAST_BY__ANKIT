@@ -228,18 +228,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Documentation**: [Wiki](https://github.com/ankitbotmaker/AUTO_BROADCAST_BY__ANKIT/wiki)
 - **Contact Ankit**: [GitHub Profile](https://github.com/ankitbotmaker)
 
-## 👨‍💻 About the Developer
-
-**Ankit** - Professional Bot Developer & Automation Expert
-- 🚀 **Specialization**: Telegram Bots, Automation, Python Development
-- 💼 **Experience**: Advanced bot development with modern features
-- 🔧 **Skills**: Python, Telegram API, MongoDB, Encryption, Deployment
-- 🌟 **Mission**: Creating powerful, user-friendly automation solutions
-
-### **Connect with Ankit:**
-- **GitHub**: [@ankitbotmaker](https://github.com/ankitbotmaker)
-- **Portfolio**: Professional bot development services
-- **Support**: Available for custom bot development
+{protected_branding.get_about_developer()}
 
 ## 🙏 Acknowledgments
 
